@@ -262,25 +262,8 @@ OCR：`ocrGate`、`extractFindings`、`parseTriage`、`matchEntry`、`hasCodeEvi
 6. 是否把 `methodLevel` 默认升为 `error`；是否要瘦身 `gate.mjs`（N5）。
 7. 是否将本项目纳入 Git、放在哪个仓库。
 
-## 7. 新会话启动提示词（可直接复制）
 
-```text
-你接手 trellis-plus（Trellis 0.6.17 + opencode 的 Node 增强脚本）v2 的后续工作。编码已完成，剩余是验证与校准。请严格按以下要求：
-
-1. 先完整阅读 HANDOFF.md，以及它指定的文件：trellis-plus/README.md、docs/FINAL-DEV-PLAN.md、assets/plus/gate.mjs、trellis-plus.mjs、assets/workflow、assets/skills、assets/agents、assets/plus/templates、test-harness/（尤其 run-regression.sh 与 README.md）。
-2. 先确认工作区真实状态：不要假设旧会话的文件还在。该项目没有 Git 仓库；若 /home/claude/work/trellis-plus 不存在，请解压我上传的 trellis-plus-v2.zip，并按 HANDOFF §2.7 校验 sha256。改动前先 cp -a 做快照，改动后用 diff -rq 对照，避免覆盖或丢失已有工作。
-3. 以最新的实际代码和我明确的需求为准；发现 HANDOFF 与代码/测试结果不一致时，先分析差异并告诉我，再动手。
-4. 从 HANDOFF §4 的 N0 开始（解压、校验、用 bash 复跑回归得到真实基线，不改代码），再按依赖顺序推进；不要重复实现已完成的功能，不要新增 HANDOFF 之外的功能。N1/N2 需要我提供内网信息时请直接向我索取。
-5. 遵循原有技术方案（做减法：删 alignment 门禁/三 reviewer/ID 链；保留 hook、agent 补丁、单测门禁、OCR 分诊）。如果你认为方案有问题，先说明原因和影响，再提出修改建议，等我确认。
-6. 每个新增/修改的门禁规则必须有正例、反例，并做“临时破坏逻辑确认断言会失败”的反向对照（用 run-regression.sh 的 reverse 机制；改 gate.mjs 后同步更新其变异串，不要删对照）。对修改过的 Java service/controller 相关逻辑，按 Java 8 + Maven 多模块 + JUnit5 + Mockito（不用 JaCoCo）的项目测试规范补充或更新单元测试。
-7. 所有 shell 脚本用 bash；多处替换的补丁脚本先全部断言再统一写出，写后用特征串计数确认。
-8. 如实报告测试与构建结果；无法验证的（内网、ocr 真实输出、真实 Maven、CodeGraph、真实 OpenCode 行为）明确标注“未验证”。
-9. 每完成一个任务，更新 HANDOFF.md 的进度记录并重新打包，保证可以再次交接。
-先回复：你读到的工作区真实状态、N0 的执行计划，以及哪些待确认项会阻塞你。
-```
-
-
-## 8. 2026-10-14 追加修改（以 micro 为底，参考 chr）
+## 7. 2026-10-14 追加修改（以 micro 为底，参考 chr）
 
 用户确认三点修改：
 

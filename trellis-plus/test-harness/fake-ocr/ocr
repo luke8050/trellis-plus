@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Fake `ocr` CLI for tests, shaped like the real ocr (checked against `ocr review --help` and `ocr llm test`). Put this directory first on PATH.
+# Real behaviour reproduced: there is NO --output flag (unknown flag, exit 2); `--format json` prints the report on stdout, progress on stderr.
+#   FAKE_OCR_VERSION=1.9.0            version printed by --version
+#   FAKE_OCR_FINDINGS_FILE=<json>     report printed on stdout (default: 1 high + 1 low finding, legacy file/line/message keys)
+#   FAKE_OCR_LOG=<file>               append the full argv of every call
+#   FAKE_OCR_REJECT_BACKGROUND=1      emulate an ocr build that does not know --background-file
+#   FAKE_OCR_LLM_TEST_EXIT=1          exit code of `ocr llm test` (default 0 = the LLM is configured and reachable)
+#   FAKE_OCR_NO_JSON=1                print only text, no JSON report (exit 0)
+#   FAKE_OCR_EXIT=<n>                 exit code of `ocr review` (default 0)
+if [ "$1" = "--version" ]; then echo "ocr ${FAKE_OCR_VERSION:-1.9.0}"; exit 0; fi
+[ -n "$FAKE_OCR_LOG" ] && echo "$*" >> "$FAKE_OCR_LOG"
+if [ "$1" = "llm" ] && [ "$2" = "test" ]; then
+  if [ "${FAKE_OCR_LLM_TEST_EXIT:-0}" != "0" ]; then echo "[ocr] llm test failed: no provider configured" >&2; exit "$FAKE_OCR_LLM_TEST_EXIT"; fi
+  echo "Source: provider:my-provider"; echo "√ Connection test successful"; exit 0
+fi
+for a in "$@"; do
+  case "$a" in
+    --output|--output=*|-o) echo "Error: unknown flag: --output" >&2; exit 2 ;;
+    --background-file|-B) [ -n "$FAKE_OCR_REJECT_BACKGROUND" ] && { echo "Error: unknown flag: --background-file" >&2; exit 2; } ;;
+  esac
+done
+echo "[ocr] 2 file(s) changed, reviewing 2 in /x" >&2
+if [ -n "$FAKE_OCR_NO_JSON" ]; then echo "review finished (no json)"; exit "${FAKE_OCR_EXIT:-0}"; fi
+if [ -n "$FAKE_OCR_FINDINGS_FILE" ]; then cat "$FAKE_OCR_FINDINGS_FILE"; else
+cat <<'JSON'
+{"comments":[
+ {"file":"src/main/java/com/acme/OrderService.java","line":8,"severity":"high","message":"possible NPE on dto.getOrderNo()"},
+ {"file":"src/main/java/com/acme/OrderController.java","line":5,"severity":"low","message":"missing @Valid"}]}
+JSON
+fi
+exit "${FAKE_OCR_EXIT:-0}"

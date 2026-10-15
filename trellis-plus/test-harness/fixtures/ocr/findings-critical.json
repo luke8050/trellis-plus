@@ -1,0 +1,2 @@
+{"comments":[
+ {"file":"src/main/java/com/acme/OrderService.java","line":8,"severity":"critical","message":"SQL injection via string concatenation"}]}

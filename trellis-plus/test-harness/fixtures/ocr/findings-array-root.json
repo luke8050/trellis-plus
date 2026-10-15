@@ -1,0 +1,4 @@
+[
+ {"path":"src/main/java/com/acme/OrderService.java","start_line":8,"severity":"medium","comment":"unchecked cast"},
+ {"path":"src/main/java/com/acme/StockService.java","start_line":3,"severity":"low","comment":"unused import"}
+]

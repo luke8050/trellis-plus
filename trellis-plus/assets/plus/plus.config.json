@@ -1,0 +1,60 @@
+{
+  "_comment": "trellis-plus v2 config. Project-owned: `apply` never overwrites this file. Only keys you set override the defaults in gate.mjs. v1.x keys (alignment, planning.idMode, planning.minAnchors, planning.minSectionChars, planning.maxReviewRounds, ocr.maxRounds, ocr.minVersion, ocr.minGitVersion) are ignored.",
+  "tiers": {
+    "budget": {
+      "S": 60000,
+      "M": 150000,
+      "L": 320000
+    },
+    "maxClassesM": 3
+  },
+  "limits": {
+    "prd": 10240,
+    "designM": 12288,
+    "designL": 30720,
+    "implement": 20480,
+    "codeMap": 20480,
+    "total": 61440
+  },
+  "planning": {
+    "anchorSymbolWindow": 15,
+    "highRiskRefs": 5
+  },
+  "review": {
+    "maxRounds": 2
+  },
+  "profile": "standard",
+  "gates": {},
+  "testGate": {
+    "include": [
+      "**/src/main/java/**/*Controller.java",
+      "**/src/main/java/**/*Service.java",
+      "**/src/main/java/**/*ServiceImpl.java"
+    ],
+    "exclude": [
+      "**/src/test/**",
+      "**/target/**"
+    ],
+    "requireTestChanged": true,
+    "methodLevel": "warn",
+    "runCommand": "mvn -q -pl {module} -am test -Dtest={classes} -Dsurefire.failIfNoSpecifiedTests=false",
+    "runCommandRoot": "mvn -q test -Dtest={classes} -Dsurefire.failIfNoSpecifiedTests=false"
+  },
+  "ocr": {
+    "enabled": true,
+    "required": true,
+    "command": "ocr",
+    "extraArgs": [],
+    "maxRerun": 2,
+    "mode": "auto",
+    "blockingSeverities": [
+      "critical",
+      "high"
+    ],
+    "background": true,
+    "backgroundMaxChars": 3000
+  },
+  "hook": {
+    "runTests": false
+  }
+}

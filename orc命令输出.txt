@@ -1,0 +1,520 @@
+luke@ULC-HQ-M0022:~/Documents/code/backend/retrade/pawm-aml$ ocr review --help
+OpenCodeReview - AI-Powered Code Review CLI
+
+Start a diff-based code review using a configurable LLM.
+
+Usage:
+  ocr review [flags]
+
+Aliases:
+  review, r
+
+Examples:
+  # Review staged + unstaged + untracked changes in current workspace
+  ocr review
+
+  # Review a branch against its base (merge-base mode)
+  ocr review --from master --to dev-ref
+
+  # Review a specific commit
+  ocr review --commit abc123
+  ocr review -c abc123
+
+  # Resume a previous range review
+  ocr review --from master --to dev-ref --resume <session-id>
+
+  # Output JSON format
+  ocr review --format json
+  ocr review -f json
+
+  # Select a configured provider and model for this run only
+  ocr review --provider anthropic --model claude-opus-4-6 --format json
+
+  # Agent mode (summary only, no progress lines)
+  ocr review --audience agent
+
+  # Preview which files will be reviewed
+  ocr review --preview
+  ocr review -c abc123 -p
+
+  # Exclude generated files / fixtures
+  ocr review --exclude '**/generated/*,**/testdata/*'
+
+  # Provide requirement/business context inline, from a Markdown file, or both
+  ocr review --background "Adding rate limiting to the login API"
+  ocr review --background-file ./docs/requirements.md
+  ocr review --background "Focus on auth" --background-file ./docs/requirements.md
+
+Flags:
+      --audience string          output audience: human (show progress; on stderr for json/sarif) or agent (summary only) (default "human")
+  -b, --background string        optional requirement/business context for the review
+  -B, --background-file string   path to a Markdown file used as review background
+  -c, --commit string            single commit hash or tag to review (vs its parent)
+      --concurrency int          max concurrent file reviews (default 8)
+      --exclude string           comma-separated gitignore-style patterns to exclude; merged with rule.json excludes
+  -f, --format string            output format: text, json, or sarif (default "text")
+      --from string              source ref to start diff from (e.g., 'main')
+  -h, --help                     help for review
+      --max-git-procs int        max concurrent git subprocesses (default 16)
+      --max-tokens int           per-file prompt token ceiling (0 = configured or template default)
+      --max-tokens-budget int    cap total token usage (input+output) for this review; dispatch stops once exceeded and skipped files
+                                 0; it exits non-zero only if every selected item failed (0 = unlimited)
+      --max-tools int            max tool call rounds per file (0 = template default; min 10)
+      --model string             override LLM model for this run (e.g., claude-opus-4-6)
+      --no-filter                keep all review comments without LLM post-filtering
+  -p, --preview                  preview which files will be reviewed without running the LLM
+      --provider string          override configured LLM provider for this run
+      --repo string              root directory of the git repository (default: current dir)
+      --resume string            resume from a previous review session id
+      --rule string              path to JSON file with system review rules
+      --timeout int              concurrent task timeout in minutes (default 10)
+      --to string                target ref to end diff at (e.g., 'feature-branch')
+      --tools string             path to JSON tools config file (default: embedded)
+
+Global Flags:
+      --color string   when to emit ANSI color: auto (only when stdout is a terminal), always, or never (default "auto")
+
+
+luke@ULC-HQ-M0022:~/Documents/code/backend/retrade/pawm-aml$ ocr llm test
+Source: provider:my-provider
+URL:    http://pawm-pfp-aigateway.fat.qa.pab.com.cn/v1
+Model:  default
+我是 open-code-review, 一个由阿里巴巴开发的代码审查助手, 运行在你的命令行环境中。
+√ Connection test successful
+
+
+luke@ULC-HQ-M00022:~/Documents/code/backend/retrade/pawm-aml$ ocr review --format json
+[ocr] 33 file(s) changed, reviewing 23 in /adhome/luke/Documents/code/backend/retrade/pawm-aml
+[ocr] Skipping 反洗钱司法划扣线上化需求_20260924(补充).md — filtered by path/extension rules
+[ocr] Skipping 反洗钱司法划扣线上化需求_20260924.md — filtered by path/extension rules
+[ocr] Skipping 反洗钱对接接口V1.5.md — filtered by path/extension rules
+[ocr] Skipping .$aml-flow-interface.drawio.bkp — filtered by path/extension rules
+[ocr] Skipping AGENTS.md — filtered by path/extension rules
+[ocr] Skipping aml-flow-interface.drawio — filtered by path/extension rules
+[ocr] Skipping pawm-aml-server/src/test/java/com/pab/pawm/aml/server/service/impl/CashProdAvailableServiceImplTest.java — filtered by path/extension rules
+[ocr] Skipping pawm-aml-server/src/test/java/com/pab/pawm/aml/server/service/impl/JudicialDeductionServiceImplTest.java — filtered by path/extension rules
+[ocr] Skipping pawm-aml-server/src/test/java/com/pab/pawm/aml/server/service/impl/QueryFreezeDeductServiceImplJudicialTest.java — filtered by path/extension rules
+[ocr] Skipping 反洗钱查冻扣后端设计.drawio — filtered by path/extension rules
+[ocr] Filtered 10 file(s) by include/exclude rules
+[ocr] Skipping plan phase for pawm-aml-api/src/main/java/com/pab/pawm/aml/api/ta/form/TaCashProdAvailableQueryItemForm.java (41 lines < threshold 50)
+[ocr] Skipping plan phase for .gitattributes (9 lines < threshold 50)
+[ocr] Skipping plan phase for pawm-aml-api/src/main/java/com/pab/pawm/aml/api/ta/form/TaCashProdAvailableQueryForm.java (32 lines < threshold 50)
+[ocr] Skipping plan phase for pawm-aml-api/src/main/java/com/pab/pawm/aml/api/ta/form/TaJudicialDeductionForm.java (32 lines < threshold 50)
+...省略文件读取日志...
+[ocr]   ▶ code_comment "scripts/Release_PAWM-RETRADE2.48.0/db/retradeaml/release-before/roll/001_ddl_alter_freeze_deduct_work_order_judicial_deduction_luke.sql"
+[ocr]   ✔ code_comment (0s)
+[ocr] No tool calls parsed for scripts/Release_PAWM-RETRADE2.48.0/db/retradeaml/release-before/roll/001_ddl_alter_freeze_deduct_work_order_judicial_deduction_luke.sql, retrying...
+{
+  "status": "partial",
+  "llm": {
+    "provider": "my-provider",
+    "model": "deepseek-v4-flash-YH"
+  },
+  "message": "Review partially complete: 13 finding(s); 1 of 23 selected item(s) failed.",
+  "summary": {
+    "files_reviewed": 23,
+    "comments": 13,
+    "total_tokens": 2324763,
+    "input_tokens": 2256592,
+    "output_tokens": 68171,
+    "cache_read_tokens": 1875456,
+    "elapsed": "7m4s"
+  },
+  "tool_calls": {
+    "total": 215,
+    "by_tool": {
+      "code_comment": 9,
+      "code_search": 62,
+      "file_find": 33,
+      "file_read": 98,
+      "file_read_diff": 13
+    }
+  },
+  "comments": [
+    {
+      "path": "pawm-aml-server/src/main/java/com/pab/pawm/aml/server/service/impl/CashProdAvailableServiceImpl.java",
+      "content": "解析 TA 响应后未校验应答状态。`TaCashProdAvailableResultDTO` 包含 `retCode`（0000=成功）和 `queryStatus`（03=查询结果成功）字段，但此处直接返回解析结果，未调用 `AbstractTaService.checkResponse()` 或对 `retCode`/`queryStatus` 做任何校验。若 TA 返回错误码，服务仍会静默返回错误 DTO 给调用方，与 `JudicialDeductionServiceImpl` 中调用 `checkResponse(resultDTO)` 的既有模式不一致。建议在返回前校验 `retCode` 是否为成功码，失败时抛出 `RetradeAmlException`。",
+      "existing_code": "        try {\n            return JSON.parseObject(taResponse, TaCashProdAvailableResultDTO.class);\n        } catch (Exception e) {\n            logger.error(\"queryCashProdAvailableVol 解析TA响应失败, taResponse={}\", taResponse, e);\n            throw new RetradeAmlException(AmlRspCodeEnum.INVOKE_TA_RESP_ERROR);\n        }",
+      "start_line": 38,
+      "end_line": 43,
+      "category": "bug",
+      "severity": "medium"
+    },
+    {
+      "path": "pawm-aml-server/src/main/java/com/pab/pawm/aml/server/enums/TaApplicationTypeEnum.java",
+      "content": "枚举类提供了 setCode/setDesc 方法，允许在运行时修改枚举常量的 code/desc 字段，破坏了枚举的不可变性。枚举值在定义时已通过构造函数初始化，外部可修改会导致枚举状态不一致，例如其他代码在运行时修改描述后，getDescByCode 返回的结果将与预期不符。建议移除 setter，仅保留 getter，保持枚举的不可变语义。",
+      "existing_code": "    public void setCode(String code) {\n        this.code = code;\n    }\n\n    public String getDesc() {\n        return desc;\n    }\n\n    public void setDesc(String desc) {\n        this.desc = desc;\n    }",
+      "start_line": 44,
+      "end_line": 54,
+      "category": "maintainability",
+      "severity": "low"
+    },
+    {
+      "path": "pawm-aml-api/src/main/java/com/pab/pawm/aml/api/ta/form/TaJudicialDeductionItemForm.java",
+      "content": "字段名 `isdefaultRedemption` 命名不规范，'default' 应为 'Default'，正确命名应为 `isDefaultRedemption`。当前命名不符合 Java camelCase 命名规范，与同类的 `isAchievementPay` 字段命名风格不一致，容易造成代码可读性差和维护混淆。建议修正为 `isDefaultRedemption`，并同步更新 getter/setter 方法名。",
+      "suggestion_code": "    /** 是否违约赎回（默认空，表示否） */\n    private String isDefaultRedemption;",
+      "existing_code": "    /** 是否违约赎回（默认空，表示否） */\n    private String isdefaultRedemption;",
+      "start_line": 29,
+      "end_line": 30,
+      "category": "maintainability",
+      "severity": "medium"
+    },
+    {
+      "path": "scripts/Release_PAWM-RETRADE2.48.0/db/retradeaml/release-before/rollback/001_ddl_alter_freeze_deduct_work_order_judicial_deduction_luke_rollback.sql",
+      "content": "回滚脚本中的 DROP COLUMN 未使用 IF EXISTS 子句。如果回滚脚本被重复执行，或正向脚本未完整执行（部分列未添加），DROP COLUMN 会因列不存在而报错中断，导致后续列无法回滚。建议为每个 DROP COLUMN 添加 IF EXISTS 以保证幂等性，例如：`ALTER TABLE retradeaml.freeze_deduct_work_order DROP COLUMN IF EXISTS capital_flow;`",
+      "suggestion_code": "ALTER TABLE retradeaml.freeze_deduct_work_order DROP COLUMN IF EXISTS capital_flow;",
+      "existing_code": "ALTER TABLE retradeaml.freeze_deduct_work_order DROP COLUMN capital_flow;",
+      "start_line": 7,
+      "end_line": 7,
+      "category": "maintainability",
+      "severity": "low"
+    },
+    {
+      "path": "scripts/Release_PAWM-RETRADE2.48.0/db/retradeaml/release-before/rollback/003_dml_insert_dict_item_judicial_deduction_luke_rollback.sql",
+      "content": "回滚脚本中 `cCMail` 的邮箱移除逻辑存在数据完整性风险。正向脚本（003_dml_insert_dict_item_judicial_deduction_luke.sql）仅在 `item_name NOT LIKE '%ml_201030175@pingan.com.cn%'` 时才追加该邮箱，即若该邮箱在正向执行前已存在，正向脚本不会做任何修改。但此回滚脚本使用 `REPLACE` 无条件移除该邮箱，会导致误删正向执行前已存在的邮箱数据。建议回滚时增加条件判断，仅当该邮箱确实由正向脚本追加时才移除，例如先判断 `item_name LIKE '%;ml_201030175@pingan.com.cn'`（即邮箱位于末尾）再执行 REPLACE，以降低误删风险。",
+      "existing_code": "UPDATE retradeaml.dict_item\nSET item_name = REPLACE(item_name, ';ml_201030175@pingan.com.cn', '')\nWHERE dict_code = 'MKT_SELL_MAIL' AND item_code = 'cCMail';",
+      "start_line": 11,
+      "end_line": 13,
+      "category": "bug",
+      "severity": "medium"
+    },
+    {
+      "path": "scripts/trellis-backup.mjs",
+      "content": "恢复操作存在路径穿越安全风险。脚本直接使用 `tar -xzf` 将归档解压到项目目录，虽然通过 `dirsInArchive` 限制了顶层目录为 `.opencode`/`.trellis`，但未对归档内条目做路径校验。若归档被恶意构造（条目包含 `../` 或绝对路径，如 `.opencode/../../etc/passwd`），解压时可能覆盖项目目录之外的文件，造成严重的数据破坏。建议在解压前遍历 `tar -tzf` 列出的条目，校验每个条目经 `path.resolve` 后仍位于项目目录内，拒绝包含 `..` 或绝对路径的条目。",
+      "existing_code": "  // 解压还原\n  const extractArgs = ['-xzf', archivePath, '--exclude=*/node_modules', ...dirsInArchive];\n  runTar(extractArgs, projectPath);",
+      "start_line": 232,
+      "end_line": 234,
+      "category": "security",
+      "severity": "high"
+    },
+    {
+      "path": "scripts/trellis-backup.mjs",
+      "content": "恢复操作缺少失败回滚机制。脚本先将现有目录重命名为 `.pre-restore.\u003c时间戳\u003e`，随后执行 tar 解压；若解压失败（如磁盘空间不足、权限问题、归档损坏），`runTar` 会抛出异常，但此时原目录已被重命名且不会自动回滚，项目处于数据不一致状态。虽然保留了 `.pre-restore` 目录，但用户可能不知道如何恢复。建议在解压失败时捕获异常，将已重命名的目录恢复原名，或至少给出明确的恢复指引。",
+      "existing_code": "  // 解压还原\n  const extractArgs = ['-xzf', archivePath, '--exclude=*/node_modules', ...dirsInArchive];\n  runTar(extractArgs, projectPath);",
+      "start_line": 232,
+      "end_line": 234,
+      "category": "bug",
+      "severity": "high"
+    },
+    {
+      "path": "scripts/trellis-backup.mjs",
+      "content": "`findLatestArchive` 的排序比较器直接调用 `fs.statSync(b)`，若目录中存在损坏的符号链接或权限不足的文件，`statSync` 会抛出异常导致整个脚本崩溃。建议在排序前先过滤掉无法 stat 的条目，或使用 try/catch 包裹。",
+      "existing_code": "    .sort((a, b) =\u003e fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);",
+      "start_line": 160,
+      "end_line": 160,
+      "category": "bug",
+      "severity": "medium"
+    },
+    {
+      "path": "scripts/trellis-backup.mjs",
+      "content": "`--name` 参数未做合法性校验。若用户传入包含路径分隔符的名称（如 `--name subdir/backup.tar.gz`），`path.join(outDir, fileName)` 会创建嵌套目录，归档可能输出到意外位置。建议使用 `path.basename(opts.name)` 或校验名称中不含路径分隔符。",
+      "existing_code": "  const fileName =\n    opts.name || `${projectName}_opencode_trellis_backup_${timestamp()}.tar.gz`;\n  const archivePath = path.join(outDir, fileName);",
+      "start_line": 133,
+      "end_line": 135,
+      "category": "bug",
+      "severity": "medium"
+    },
+    {
+      "path": "scripts/Release_PAWM-RETRADE2.48.0/db/retradeaml/release-before/roll/003_dml_insert_dict_item_judicial_deduction_luke.sql",
+      "content": "该 UPDATE 依赖 `MKT_SELL_MAIL` 字典下已存在 `cCMail` 字典项。但根据现有脚本（2.33.0/2.36.0）中 `MKT_SELL_MAIL` 字典项的定义（MKT_SELL_MAIL_CODE、MKT_SELL_MAIL_PROMOTER、MKT_SELL_M_MAIL、MKT_SELL_CC_MAIL、freezeExpirationMailTitle 等），并未发现 `cCMail` 项。若该字典项不存在，此 UPDATE 将静默不生效，导致抄送邮箱未追加。建议先确认 `cCMail` 是否已在 `MKT_SELL_MAIL` 字典中定义；若不存在，应改为 INSERT 或先 INSERT 再 UPDATE，避免静默失败。",
+      "existing_code": "UPDATE retradeaml.dict_item\nSET item_name = CONCAT(item_name, ';ml_201030175@pingan.com.cn')\nWHERE dict_code = 'MKT_SELL_MAIL'\n  AND item_code = 'cCMail'\n  AND item_name NOT LIKE '%ml_201030175@pingan.com.cn%';",
+      "start_line": 15,
+      "end_line": 19,
+      "category": "bug",
+      "severity": "medium"
+    },
+    {
+      "path": "scripts/Release_PAWM-RETRADE2.48.0/db/retradeaml/release-before/roll/003_dml_insert_dict_item_judicial_deduction_luke.sql",
+      "content": "回滚脚本使用 `REPLACE(item_name, ';ml_201030175@pingan.com.cn', '')` 移除抄送邮箱。若 `cCMail` 的原始值恰好以 `ml_201030175@pingan.com.cn` 开头（即追加后形如 `ml_201030175@pingan.com.cn;xxx`），则回滚时 REPLACE 无法匹配到带前导分号的子串，导致邮箱无法被正确移除。建议回滚逻辑与正向脚本的追加方式保持一致并考虑边界情况（如邮箱位于开头时）。",
+      "existing_code": "UPDATE retradeaml.dict_item\nSET item_name = CONCAT(item_name, ';ml_201030175@pingan.com.cn')\nWHERE dict_code = 'MKT_SELL_MAIL'\n  AND item_code = 'cCMail'\n  AND item_name NOT LIKE '%ml_201030175@pingan.com.cn%';",
+      "start_line": 15,
+      "end_line": 19,
+      "category": "bug",
+      "severity": "low"
+    },
+    {
+      "path": "scripts/Release_PAWM-RETRADE2.48.0/db/retradeaml/release-before/roll/002_ddl_alter_freeze_deduct_position_info_judicial_deduction_luke.sql",
+      "content": "`deduct_confirm_amount`（划扣确认金额）使用 VARCHAR(32) 存储金额字段。同表已有 `prod_total_value DECIMAL(38,6)` 使用 DECIMAL 类型存储金额的先例。金额字段使用 VARCHAR 存储会导致：1) 数值比较时按字符串排序（如 \"10\" \u003c \"9\"）；2) 算术运算需先 CAST 转换；3) 无法利用数值索引优化范围查询。建议改为 DECIMAL 类型（如 DECIMAL(38,6)），与同表 `prod_total_value` 保持一致。若因 TA 接口返回字符串格式而必须保留原样，建议在应用层做类型转换。",
+      "existing_code": "  ADD COLUMN deduct_confirm_amount VARCHAR(32) NULL COMMENT '划扣确认金额(TA返回)';",
+      "start_line": 20,
+      "end_line": 20,
+      "category": "maintainability",
+      "severity": "medium"
+    },
+    {
+      "path": "scripts/Release_PAWM-RETRADE2.48.0/db/retradeaml/release-before/roll/001_ddl_alter_freeze_deduct_work_order_judicial_deduction_luke.sql",
+      "content": "字段注释标注为\"划扣必填\"，但列定义为 `NULL`，允许为空。若应用层未强制校验该字段，可能导致划扣工单缺少资金去向数据，影响后续TA报文组装。建议在应用层对 `capital_flow` 做必填校验，或考虑在业务约束允许的情况下设置 `NOT NULL`。",
+      "existing_code": "ALTER TABLE retradeaml.freeze_deduct_work_order\n  ADD COLUMN capital_flow VARCHAR(2) NULL COMMENT '资金去向:1-三方机构 2-渠道(划扣必填,传TA)';",
+      "start_line": 11,
+      "end_line": 12,
+      "category": "bug",
+      "severity": "medium"
+    }
+  ],
+  "session_id": "3797666f-ceb9-45f3-8b62-3d597001906f",
+  "manifest": {
+    "schema_version": "ocr.run-manifest/v1",
+    "run_id": "3797666f-ceb9-45f3-8b62-3d597001906f",
+    "operation": "review",
+    "terminal_state": "partial",
+    "repository": {
+      "identity_sha256": "1e366cfa4eae59882cea5964e95386cee3fa4dbf4a4eccf582ce028e8cabce8b"
+    },
+    "input": {
+      "mode": "workspace",
+      "resolved_base": "c5d4d0fb4cca21f6c5a8e675c4694e53a8d819c5",
+      "source_artifact_sha256": "84c74a5b7b4ea96d3e50ba10a70c820a123e547048f2b48549cf58961fdee200"
+    },
+    "execution": {
+      "ocr_version": "v1.9.8",
+      "provider": "my-provider",
+      "model": "deepseek-v4-flash-YH",
+      "configured_concurrency": 8,
+      "rule_config_sha256": "4afad74442aafca69595179d239a262461a4d0a26af18bcc366046a3f107991c",
+      "runtime_config_sha256": "6ee7aa7a2e5dc20abcb7e9e7dc476fb7c64b2a665a2c2a113c36dd9978adb867"
+    },
+    "coverage": {
+      "selected": [
+        {
+          "item_id": "01f48876461913d22dd38e74c354b893ea42fa66374377cc992be3cb4eae1ba0",
+          "path": "scripts/Release_PAWM-RETRADE2.48.0/db/retradeaml/release-before/roll/002_ddl_alter_freeze_deduct_position_info_judicial_deduction_luke.sql",
+          "fingerprint": "6a75b38b0fb0d0346a3e79978483679155b8daef0976d6ca6be33bef001f9b6d"
+        },
+        {
+          "item_id": "048df88a8e8deae0647e4ad7d662cba1de1ef00ca59bb3ceefc99846bf9e4e7e",
+          "path": "scripts/Release_PAWM-RETRADE2.48.0/db/retradeaml/release-before/rollback/002_ddl_alter_freeze_deduct_position_info_judicial_deduction_luke_rollback.sql",
+          "fingerprint": "fc02259e744c7717feeafc1750a31d4f169b6f7fef07f268a0d69ca66dbba2fd"
+        },
+        {
+          "item_id": "0596de4e927432d74e1cd96c2e4ac87ccf7cb51c451c529f5587a18130b0b3a6",
+          "path": "scripts/Release_PAWM-RETRADE2.48.0/db/retradeaml/release-before/roll/003_dml_insert_dict_item_judicial_deduction_luke.sql",
+          "fingerprint": "35d79a590f0b936a6b58ef565e5af7cddc2a2883e1e275a771e8539205030d4e"
+        },
+        {
+          "item_id": "05e2fa4098016d31ea1de672de65c97294460ce75189c37b8ada1966caacf6cd",
+          "path": "review-result-20261013-154002.html",
+          "fingerprint": "84c539fe921f9044dbdb8bd0d9d18a16459d2fde3fdd9b5c37567b1944b77cf4"
+        },
+        {
+          "item_id": "0a880cff127f300ec5145ab40d13b3001fa8465c2f9e3530578983da04d2f40e",
+          "path": ".gitattributes",
+          "fingerprint": "ec1f771e8687966cfe622cd3e2d4b0f75fa154f13f31892aee323ffe6c00964d"
+        },
+        {
+          "item_id": "14951c37c4a4181360fa572d8c8fc0b9cb151fe2bb0a2952549d25ec4b2ecef7",
+          "path": "pawm-aml-server/src/main/java/com/pab/pawm/aml/server/dto/ta/TaCashProdAvailableItemDTO.java",
+          "fingerprint": "6569ccca9dcb8f52b67af0416f2eb76cd69cf5ca2c964b62892f3c421d60fc62"
+        },
+        {
+          "item_id": "1780ab558d70a96f2d3cbec37c0e734525613ac84b528f5a44ba9725e6ed4101",
+          "path": "pawm-aml-api/src/main/java/com/pab/pawm/aml/api/ta/form/TaJudicialDeductionForm.java",
+          "fingerprint": "4539ff243e9b5179baae5ab73da4e5d3b6bcac6c0ce650b3646449ba541c7dd6"
+        },
+        {
+          "item_id": "2cde5ea18c57066f21420715370481f0b89bc22033a58dfde6adb32f0368cf07",
+          "path": "scripts/trellis-backup.mjs",
+          "fingerprint": "11e1112f99201a944977e4222decfbe277fcc37cd0040936e4dd73cdfba69347"
+        },
+        {
+          "item_id": "34c696ea037fed9cdbe513b4cbd7011bf38ae8fa884e37e6ff94e17f1aef8f44",
+          "path": "pawm-aml-server/src/main/java/com/pab/pawm/aml/server/dto/ta/TaProdShareDeductionDTO.java",
+          "fingerprint": "dc70c28f5bb6e584f32c78f42c436243bf6009f517928b7c7baa78c347729656"
+        },
+        {
+          "item_id": "56db7513e05fe201cbbbe16733f311d81d10f99a1fd7e845e3e6102d6aab010e",
+          "path": "pawm-aml-server/src/main/java/com/pab/pawm/aml/server/service/JudicialDeductionService.java",
+          "fingerprint": "f32993a3094d9c03655bd01d8b21be361bc045169e7d855a5f716f7c1a1d200e"
+        },
+        {
+          "item_id": "5c5947cd56c434fc27256e7de9821b1be22e6eea9e0b69a0b7aa320fb38db7a8",
+          "path": "pawm-aml-api/src/main/java/com/pab/pawm/aml/api/ta/form/TaJudicialDeductionItemForm.java",
+          "fingerprint": "1042f965d116d37cff228a3c6e493c590691209b17f8d6843343b6bde67ed5b1"
+        },
+        {
+          "item_id": "7f2c1589dd5413f76a84894417f929f2e3df0e8d3c904347e8ffe2abd1e9e3c9",
+          "path": "review-result-20261013-154002.json",
+          "fingerprint": "8f53f0d7a4d703c2713c07a3c90a8f2faf41846bc57b6043d4f76e86e6c5e697"
+        },
+        {
+          "item_id": "8910ae7c3509dc3637b8a408a9cec3dbd321425fd0de9c346c292e36a8f8f3bb",
+          "path": "scripts/Release_PAWM-RETRADE2.48.0/db/retradeaml/release-before/rollback/001_ddl_alter_freeze_deduct_work_order_judicial_deduction_luke_rollback.sql",
+          "fingerprint": "0afd4343165a7349a526497fc87a89dc8437caf1a953e04e5fedb3761dbb4d03"
+        },
+        {
+          "item_id": "9525d198565a98857677404dc64c996b407b31df8c951317a8cae5278afc8d1a",
+          "path": "pawm-aml-api/src/main/java/com/pab/pawm/aml/api/ta/form/TaCashProdAvailableQueryItemForm.java",
+          "fingerprint": "68cd1898cce2b7157884193b4ce2b26f3aa6cec40d3a3fa0dedf2afafdadb935"
+        },
+        {
+          "item_id": "a16a1f1beb70c3902400d845dc5472d84f76836cd782fa344b59dbdef637ed97",
+          "path": "pawm-aml-server/src/main/java/com/pab/pawm/aml/server/dto/ta/TaCashProdAvailableResultDTO.java",
+          "fingerprint": "736df2fb1e2b8787e4d8b00bf80a6a2bae5c58f0a19ac281f6c3f296c2ed6176"
+        },
+        {
+          "item_id": "ca8ce0309d2e64eaf252f4920ef90296b9f9be02a61438791b4115b3869b0fa8",
+          "path": "pawm-aml-server/src/main/java/com/pab/pawm/aml/server/enums/TaApplicationTypeEnum.java",
+          "fingerprint": "e144b7e7c773d499437667fec39a24bb6ffb04306b1ba0f7ff515323fe09790c"
+        },
+        {
+          "item_id": "d72b1d828ba680eac942779ca9025a742e4ceb9770909bab90d36ea52330512f",
+          "path": "pawm-aml-server/src/main/java/com/pab/pawm/aml/server/service/impl/JudicialDeductionServiceImpl.java",
+          "fingerprint": "4698ac2dfa1a29cda9b5cb492e9dfb9538c47263fb6983e98ea593542ee3f2f4"
+        },
+        {
+          "item_id": "e08eb26b542f499963f84b875ab580c63b97d03fbf7c6453977b099c4efd4e0d",
+          "path": "pawm-aml-server/src/main/java/com/pab/pawm/aml/server/service/CashProdAvailableService.java",
+          "fingerprint": "4e3526b3f492aa0cda7303078cc4910a3f1201c2804fd92028e4d6dfde0c14ed"
+        },
+        {
+          "item_id": "e216d05072acb657754a6de1c686183eb2e2837a36bbcdccec8499e6373f1bcd",
+          "path": "pawm-aml-server/src/main/java/com/pab/pawm/aml/server/service/impl/CashProdAvailableServiceImpl.java",
+          "fingerprint": "7630c3798986b04def5bb57ce8ec14172a84b2fbf65f3e72bd7530f781636b07"
+        },
+        {
+          "item_id": "e7f082dd67b9baa1587c6367e496b0900dd74ca587013cdcd4b9bc947738e0a1",
+          "path": "pawm-aml-server/src/main/java/com/pab/pawm/aml/server/enums/CapitalFlowEnum.java",
+          "fingerprint": "010cdc6f1938ef2de2fd5e9bedf8b5f7f8bfd679485d140179a6d00149a042db"
+        },
+        {
+          "item_id": "e999f350af1306c95c22b3bd823309389ee120d39d4c927acdc911d8dc304be2",
+          "path": "scripts/Release_PAWM-RETRADE2.48.0/db/retradeaml/release-before/roll/001_ddl_alter_freeze_deduct_work_order_judicial_deduction_luke.sql",
+          "fingerprint": "36c717db3895ddd7faadb55f73d1ee4bb26b9d42bc0ca953e1ef87fdcc40ef53"
+        },
+        {
+          "item_id": "ea856b7c537ee8cf3f5119c1568e67d859639c862c40f9c6f72bfe9dec72bf7b",
+          "path": "scripts/Release_PAWM-RETRADE2.48.0/db/retradeaml/release-before/rollback/003_dml_insert_dict_item_judicial_deduction_luke_rollback.sql",
+          "fingerprint": "8718ebffb44ade550e4ec1e64cc875778a54c6fd52ad71f788139e2e3d415a0d"
+        },
+        {
+          "item_id": "f388b06d532748a7ee090b6059d635048368a3f20a6afa920881006e835e8e72",
+          "path": "pawm-aml-api/src/main/java/com/pab/pawm/aml/api/ta/form/TaCashProdAvailableQueryForm.java",
+          "fingerprint": "9c8d96a9f425e40307b9976c71f050c70dc6d1efba8253c3d41ffe3795ebf855"
+        }
+      ],
+      "completed": [
+        {
+          "item_id": "01f48876461913d22dd38e74c354b893ea42fa66374377cc992be3cb4eae1ba0",
+          "path": "scripts/Release_PAWM-RETRADE2.48.0/db/retradeaml/release-before/roll/002_ddl_alter_freeze_deduct_position_info_judicial_deduction_luke.sql",
+          "fingerprint": "6a75b38b0fb0d0346a3e79978483679155b8daef0976d6ca6be33bef001f9b6d"
+        },
+        {
+          "item_id": "048df88a8e8deae0647e4ad7d662cba1de1ef00ca59bb3ceefc99846bf9e4e7e",
+          "path": "scripts/Release_PAWM-RETRADE2.48.0/db/retradeaml/release-before/rollback/002_ddl_alter_freeze_deduct_position_info_judicial_deduction_luke_rollback.sql",
+          "fingerprint": "fc02259e744c7717feeafc1750a31d4f169b6f7fef07f268a0d69ca66dbba2fd"
+        },
+        {
+          "item_id": "05e2fa4098016d31ea1de672de65c97294460ce75189c37b8ada1966caacf6cd",
+          "path": "review-result-20261013-154002.html",
+          "fingerprint": "84c539fe921f9044dbdb8bd0d9d18a16459d2fde3fdd9b5c37567b1944b77cf4"
+        },
+        {
+          "item_id": "0a880cff127f300ec5145ab40d13b3001fa8465c2f9e3530578983da04d2f40e",
+          "path": ".gitattributes",
+          "fingerprint": "ec1f771e8687966cfe622cd3e2d4b0f75fa154f13f31892aee323ffe6c00964d"
+        },
+        {
+          "item_id": "14951c37c4a4181360fa572d8c8fc0b9cb151fe2bb0a2952549d25ec4b2ecef7",
+          "path": "pawm-aml-server/src/main/java/com/pab/pawm/aml/server/dto/ta/TaCashProdAvailableItemDTO.java",
+          "fingerprint": "6569ccca9dcb8f52b67af0416f2eb76cd69cf5ca2c964b62892f3c421d60fc62"
+        },
+        {
+          "item_id": "1780ab558d70a96f2d3cbec37c0e734525613ac84b528f5a44ba9725e6ed4101",
+          "path": "pawm-aml-api/src/main/java/com/pab/pawm/aml/api/ta/form/TaJudicialDeductionForm.java",
+          "fingerprint": "4539ff243e9b5179baae5ab73da4e5d3b6bcac6c0ce650b3646449ba541c7dd6"
+        },
+        {
+          "item_id": "2cde5ea18c57066f21420715370481f0b89bc22033a58dfde6adb32f0368cf07",
+          "path": "scripts/trellis-backup.mjs",
+          "fingerprint": "11e1112f99201a944977e4222decfbe277fcc37cd0040936e4dd73cdfba69347"
+        },
+        {
+          "item_id": "34c696ea037fed9cdbe513b4cbd7011bf38ae8fa884e37e6ff94e17f1aef8f44",
+          "path": "pawm-aml-server/src/main/java/com/pab/pawm/aml/server/dto/ta/TaProdShareDeductionDTO.java",
+          "fingerprint": "dc70c28f5bb6e584f32c78f42c436243bf6009f517928b7c7baa78c347729656"
+        },
+        {
+          "item_id": "56db7513e05fe201cbbbe16733f311d81d10f99a1fd7e845e3e6102d6aab010e",
+          "path": "pawm-aml-server/src/main/java/com/pab/pawm/aml/server/service/JudicialDeductionService.java",
+          "fingerprint": "f32993a3094d9c03655bd01d8b21be361bc045169e7d855a5f716f7c1a1d200e"
+        },
+        {
+          "item_id": "5c5947cd56c434fc27256e7de9821b1be22e6eea9e0b69a0b7aa320fb38db7a8",
+          "path": "pawm-aml-api/src/main/java/com/pab/pawm/aml/api/ta/form/TaJudicialDeductionItemForm.java",
+          "fingerprint": "1042f965d116d37cff228a3c6e493c590691209b17f8d6843343b6bde67ed5b1"
+        },
+        {
+          "item_id": "7f2c1589dd5413f76a84894417f929f2e3df0e8d3c904347e8ffe2abd1e9e3c9",
+          "path": "review-result-20261013-154002.json",
+          "fingerprint": "8f53f0d7a4d703c2713c07a3c90a8f2faf41846bc57b6043d4f76e86e6c5e697"
+        },
+        {
+          "item_id": "8910ae7c3509dc3637b8a408a9cec3dbd321425fd0de9c346c292e36a8f8f3bb",
+          "path": "scripts/Release_PAWM-RETRADE2.48.0/db/retradeaml/release-before/rollback/001_ddl_alter_freeze_deduct_work_order_judicial_deduction_luke_rollback.sql",
+          "fingerprint": "0afd4343165a7349a526497fc87a89dc8437caf1a953e04e5fedb3761dbb4d03"
+        },
+        {
+          "item_id": "9525d198565a98857677404dc64c996b407b31df8c951317a8cae5278afc8d1a",
+          "path": "pawm-aml-api/src/main/java/com/pab/pawm/aml/api/ta/form/TaCashProdAvailableQueryItemForm.java",
+          "fingerprint": "68cd1898cce2b7157884193b4ce2b26f3aa6cec40d3a3fa0dedf2afafdadb935"
+        },
+        {
+          "item_id": "a16a1f1beb70c3902400d845dc5472d84f76836cd782fa344b59dbdef637ed97",
+          "path": "pawm-aml-server/src/main/java/com/pab/pawm/aml/server/dto/ta/TaCashProdAvailableResultDTO.java",
+          "fingerprint": "736df2fb1e2b8787e4d8b00bf80a6a2bae5c58f0a19ac281f6c3f296c2ed6176"
+        },
+        {
+          "item_id": "ca8ce0309d2e64eaf252f4920ef90296b9f9be02a61438791b4115b3869b0fa8",
+          "path": "pawm-aml-server/src/main/java/com/pab/pawm/aml/server/enums/TaApplicationTypeEnum.java",
+          "fingerprint": "e144b7e7c773d499437667fec39a24bb6ffb04306b1ba0f7ff515323fe09790c"
+        },
+        {
+          "item_id": "d72b1d828ba680eac942779ca9025a742e4ceb9770909bab90d36ea52330512f",
+          "path": "pawm-aml-server/src/main/java/com/pab/pawm/aml/server/service/impl/JudicialDeductionServiceImpl.java",
+          "fingerprint": "4698ac2dfa1a29cda9b5cb492e9dfb9538c47263fb6983e98ea593542ee3f2f4"
+        },
+        {
+          "item_id": "e08eb26b542f499963f84b875ab580c63b97d03fbf7c6453977b099c4efd4e0d",
+          "path": "pawm-aml-server/src/main/java/com/pab/pawm/aml/server/service/CashProdAvailableService.java",
+          "fingerprint": "4e3526b3f492aa0cda7303078cc4910a3f1201c2804fd92028e4d6dfde0c14ed"
+        },
+        {
+          "item_id": "e216d05072acb657754a6de1c686183eb2e2837a36bbcdccec8499e6373f1bcd",
+          "path": "pawm-aml-server/src/main/java/com/pab/pawm/aml/server/service/impl/CashProdAvailableServiceImpl.java",
+          "fingerprint": "7630c3798986b04def5bb57ce8ec14172a84b2fbf65f3e72bd7530f781636b07"
+        },
+        {
+          "item_id": "e7f082dd67b9baa1587c6367e496b0900dd74ca587013cdcd4b9bc947738e0a1",
+          "path": "pawm-aml-server/src/main/java/com/pab/pawm/aml/server/enums/CapitalFlowEnum.java",
+          "fingerprint": "010cdc6f1938ef2de2fd5e9bedf8b5f7f8bfd679485d140179a6d00149a042db"
+        },
+        {
+          "item_id": "e999f350af1306c95c22b3bd823309389ee120d39d4c927acdc911d8dc304be2",
+          "path": "scripts/Release_PAWM-RETRADE2.48.0/db/retradeaml/release-before/roll/001_ddl_alter_freeze_deduct_work_order_judicial_deduction_luke.sql",
+          "fingerprint": "36c717db3895ddd7faadb55f73d1ee4bb26b9d42bc0ca953e1ef87fdcc40ef53"
+        },
+        {
+          "item_id": "ea856b7c537ee8cf3f5119c1568e67d859639c862c40f9c6f72bfe9dec72bf7b",
+          "path": "scripts/Release_PAWM-RETRADE2.48.0/db/retradeaml/release-before/rollback/003_dml_insert_dict_item_judicial_deduction_luke_rollback.sql",
+          "fingerprint": "8718ebffb44ade550e4ec1e64cc875778a54c6fd52ad71f788139e2e3d415a0d"
+        },
+        {
+          "item_id": "f388b06d532748a7ee090b6059d635048368a3f20a6afa920881006e835e8e72",
+          "path": "pawm-aml-api/src/main/java/com/pab/pawm/aml/api/ta/form/TaCashProdAvailableQueryForm.java",
+          "fingerprint": "9c8d96a9f425e40307b9976c71f050c70dc6d1efba8253c3d41ffe3795ebf855"
+        }
+      ],
+      "reused": [],
+      "failed": [
+        {
+          "item_id": "0596de4e927432d74e1cd96c2e4ac87ccf7cb51c451c529f5587a18130b0b3a6",
+          "path": "scripts/Release_PAWM-RETRADE2.48.0/db/retradeaml/release-before/roll/003_dml_insert_dict_item_judicial_deduction_luke.sql",
+          "fingerprint": "35d79a590f0b936a6b58ef565e5af7cddc2a2883e1e275a771e8539205030d4e",
+          "classification": "budget",
+          "reason": "reached the maximum tool-request rounds without finishing"
+        }
+      ],
+      "waived": []
+    },
+    "elapsed_ms": 423782
+  }
+}

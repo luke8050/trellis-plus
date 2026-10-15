@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Fake `mvn` for tests. Put this directory first on PATH.
+#   FAKE_MVN_LOG=<file>   append the full argv of every call
+#   FAKE_MVN_FAIL=<n>     exit with <n> (default 0)
+[ -n "$FAKE_MVN_LOG" ] && echo "$*" >> "$FAKE_MVN_LOG"
+echo "fake-mvn: $*"
+exit "${FAKE_MVN_FAIL:-0}"

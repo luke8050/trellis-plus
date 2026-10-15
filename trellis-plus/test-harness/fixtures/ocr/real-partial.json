@@ -1,0 +1,157 @@
+{
+  "status": "partial",
+  "llm": {
+    "provider": "my-provider",
+    "model": "some-model"
+  },
+  "message": "Review partially complete: 6 finding(s); 1 of 5 selected item(s) failed.",
+  "summary": {
+    "files_reviewed": 5,
+    "comments": 6,
+    "total_tokens": 100000,
+    "input_tokens": 98000,
+    "output_tokens": 2000,
+    "cache_read_tokens": 0,
+    "elapsed": "1m2s"
+  },
+  "tool_calls": {
+    "total": 3,
+    "by_tool": {
+      "file_read": 3
+    }
+  },
+  "comments": [
+    {
+      "path": "src/main/java/com/acme/OrderService.java",
+      "content": "解析响应后未校验应答码，失败时会静默返回错误对象。建议在返回前校验 retCode。",
+      "existing_code": "        return JSON.parseObject(resp, ResultDTO.class);",
+      "start_line": 3,
+      "end_line": 5,
+      "category": "bug",
+      "severity": "medium"
+    },
+    {
+      "path": "src/main/java/com/acme/OrderService.java",
+      "content": "归档解压前未校验条目路径，存在路径穿越风险。建议拒绝包含 .. 或绝对路径的条目。",
+      "existing_code": "  extract(archive, dir);",
+      "start_line": 8,
+      "end_line": 9,
+      "category": "security",
+      "severity": "high"
+    },
+    {
+      "path": "src/main/java/com/acme/OrderService.java",
+      "content": "解压失败时没有回滚已重命名的目录，项目会处于不一致状态。建议捕获异常后恢复原目录名。",
+      "existing_code": "  extract(archive, dir);",
+      "start_line": 8,
+      "end_line": 9,
+      "category": "bug",
+      "severity": "high"
+    },
+    {
+      "path": "src/main/java/com/acme/OrderController.java",
+      "content": "字段命名不规范。建议重命名并同步 getter/setter。",
+      "existing_code": "    private String isdefault;",
+      "start_line": 5,
+      "end_line": 5,
+      "category": "maintainability",
+      "severity": "low"
+    },
+    {
+      "path": "db/rollback/001_rollback.sql",
+      "content": "DROP COLUMN 未使用 IF EXISTS，重复执行会报错。",
+      "existing_code": "ALTER TABLE t DROP COLUMN c;",
+      "start_line": 7,
+      "end_line": 7,
+      "category": "maintainability",
+      "severity": "low"
+    },
+    {
+      "path": "db/roll/003_insert.sql",
+      "content": "该 UPDATE 依赖字典项已存在，若不存在则静默不生效。",
+      "existing_code": "UPDATE dict_item SET item_name = CONCAT(item_name, ';a@b.c') WHERE item_code = 'cCMail';",
+      "start_line": 15,
+      "end_line": 19,
+      "category": "bug",
+      "severity": "medium"
+    }
+  ],
+  "session_id": "00000000-0000-0000-0000-000000000000",
+  "manifest": {
+    "schema_version": "ocr.run-manifest/v1",
+    "run_id": "00000000-0000-0000-0000-000000000000",
+    "operation": "review",
+    "terminal_state": "partial",
+    "input": {
+      "mode": "workspace",
+      "resolved_base": "0000000000000000000000000000000000000000"
+    },
+    "execution": {
+      "ocr_version": "v1.9.8",
+      "provider": "my-provider",
+      "model": "some-model"
+    },
+    "coverage": {
+      "selected": [
+        {
+          "item_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "path": "src/main/java/com/acme/OrderService.java",
+          "fingerprint": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        },
+        {
+          "item_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "path": "src/main/java/com/acme/OrderController.java",
+          "fingerprint": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        },
+        {
+          "item_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "path": "db/rollback/001_rollback.sql",
+          "fingerprint": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        },
+        {
+          "item_id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "path": "db/roll/003_insert.sql",
+          "fingerprint": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        },
+        {
+          "item_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "path": "review-result-20261013-154002.json",
+          "fingerprint": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        }
+      ],
+      "completed": [
+        {
+          "item_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "path": "src/main/java/com/acme/OrderService.java",
+          "fingerprint": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        },
+        {
+          "item_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "path": "src/main/java/com/acme/OrderController.java",
+          "fingerprint": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        },
+        {
+          "item_id": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "path": "db/rollback/001_rollback.sql",
+          "fingerprint": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        },
+        {
+          "item_id": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "path": "db/roll/003_insert.sql",
+          "fingerprint": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        }
+      ],
+      "reused": [],
+      "failed": [
+        {
+          "item_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "path": "db/roll/003_insert.sql",
+          "fingerprint": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "classification": "budget",
+          "reason": "reached the maximum tool-request rounds without finishing"
+        }
+      ],
+      "waived": []
+    }
+  }
+}

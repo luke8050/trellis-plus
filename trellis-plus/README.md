@@ -4,7 +4,7 @@
 
 v2 相对 v1.1 做减法：删掉 alignment 门禁、三个 reviewer、REQ/DES/IMP/TEST 的 ID 链和 hash 绑定；保留 hook、agent 补丁、单测门禁、OCR 分诊；新增 **S/M/L 分级**（AI 建议 + 用户选择）、**与用户的澄清记录**、**单个独立设计评审员**、**多模块单测门禁**。
 
-> 文档：`docs/方案介绍.md`（为什么这样做、改了什么、验证到什么程度）· `docs/使用说明.md`（安装、日常流程、配置、排错）。
+> 文档：[方案介绍](https://github.com/luke8050/trellis-plus/blob/main/docs/方案介绍.md)（为什么这样做、改了什么、验证到什么程度）· [使用说明](https://github.com/luke8050/trellis-plus/blob/main/docs/使用说明.md)（安装、日常流程、配置、排错）。
 
 ## 使用
 
@@ -84,7 +84,7 @@ Phase 3  gate pre-commit → 提交（git hook 再查一遍已暂存文件）
 
 `.trellis/plus/{gate.mjs,plus.config.json,templates/}`、`.trellis/spec/guides/{plus-testing-guide.md,plus-doc-samples/}`、`.opencode/agents/plus-design-reviewer.md`、`.opencode/skills/{plus-draft,plus-test-gate,plus-ocr-review}/`、`.opencode/commands/plus-grill-design.md`；补丁：`workflow.md`（块级）、`task.py`（硬门禁）、`trellis-context.js`、两个 agent 文件、`.git/hooks/pre-commit`。
 
-## 已知限制 / 未验证（详见 docs/FINAL-DEV-PLAN.md §5）
+## 已知限制 / 未验证（详见 [FINAL-DEV-PLAN.md](https://github.com/luke8050/trellis-plus/blob/main/trellis-plus/docs/FINAL-DEV-PLAN.md) §5）
 
 - **ocr 报告结构已按 v1.9.8 的一份真实输出校准**（`comments[]`：path/content/start_line/severity…）；命令行参数已按 `ocr review --help` 校准（真实 ocr **没有 `--output`**，报告走 stdout，由 gate 存成 `ocr-r<N>.json`；`--audience agent`、`--format json`、`-B/--background-file` 均存在）、`ocr llm test` 的成功输出已见过；失败时的退出码与 ocr 在真实运行中的退出码语义仍**未验证**，样例只含 medium/high/low，未见过 critical。
 - **真实 Maven 未验证**：运行命令只用假 mvn 验证了拼装、分组与退出码（本次按用户决定不处理单测优化，保持现状）。
@@ -103,4 +103,4 @@ Phase 3  gate pre-commit → 提交（git hook 再查一遍已暂存文件）
 
 ## 开发与交接
 
-回归：`TRELLIS_DEVELOPER=<名字> BASE=<trellis init 出来的项目> [V11_TOOL=<v1.1 目录>] bash test-harness/run-regression.sh`，说明见 `test-harness/README.md`。交接记录见仓库 `docs/HANDOFF.md`。
+回归：`TRELLIS_DEVELOPER=<名字> BASE=<trellis init 出来的项目> [V11_TOOL=<v1.1 目录>] bash test-harness/run-regression.sh`，说明见 [test-harness/README.md](https://github.com/luke8050/trellis-plus/blob/main/trellis-plus/test-harness/README.md)。交接记录见仓库 [docs/HANDOFF.md](https://github.com/luke8050/trellis-plus/blob/main/docs/HANDOFF.md)。

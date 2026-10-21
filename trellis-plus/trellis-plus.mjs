@@ -13,6 +13,7 @@
  *                                          [--patch-agents] [--git-hook] [--all] [--force]
  *   node trellis-plus.mjs doctor <project> [--fix]
  *   node trellis-plus.mjs revert <project> [--purge]
+ *   node trellis-plus.mjs -h | --help
  *
  * <project> = the directory that contains .trellis/ and .opencode/ (defaults to the current directory;
  * `--root <project>` is accepted as an alias). Run it after `trellis init` / `trellis update`.
@@ -38,7 +39,8 @@ const ASSETS = join(HERE, "assets")
 // ───────────── args ─────────────
 
 const argv = process.argv.slice(2)
-const command = argv[0] && !argv[0].startsWith("--") ? argv[0] : "help"
+const HELP = argv.includes("-h") || argv.includes("--help")
+const command = argv[0] && !argv[0].startsWith("-") ? argv[0] : "help"
 const flag = (n) => argv.includes(`--${n}`)
 const opt = (n) => { const i = argv.indexOf(`--${n}`); return i >= 0 && argv[i + 1] && !argv[i + 1].startsWith("--") ? argv[i + 1] : null }
 // positional project path: first non-flag token after the command that is not the value of --root
@@ -547,9 +549,9 @@ const selfRel = () => {
 }
 
 function help() {
-  console.log(readFileSync(fileURLToPath(import.meta.url), "utf8").split("\n").slice(2, 17).join("\n").replace(/^ \* ?/gm, ""))
+  console.log(readFileSync(fileURLToPath(import.meta.url), "utf8").split("\n").slice(2, 19).join("\n").replace(/^ \* ?/gm, ""))
   return 0
 }
 
-const code = { apply: cmdApply, doctor: cmdDoctor, revert: cmdRevert, help }[command]?.() ?? (console.error(`unknown command: ${command}`), 2)
+const code = HELP ? help() : ({ apply: cmdApply, doctor: cmdDoctor, revert: cmdRevert, help }[command]?.() ?? (console.error(`unknown command: ${command}`), 2))
 process.exit(code)

@@ -24,11 +24,6 @@
 
 - 方案摘要：服务层预检查 + 重复时抛 DuplicateOrderException，Controller 统一映射为 409。
 
-| 方案 | 优点 | 缺点 | 结论 |
-| --- | --- | --- | --- |
-| A 服务层预检查 | 改动小，易回滚 | 并发下有极小竞态 | 采用 |
-| B 数据库唯一索引 | 彻底杜绝重复 | 需迁移存量重复数据，发布窗口长 | 放弃，另立项 |
-
 ```mermaid
 sequenceDiagram
   participant C as OrderController

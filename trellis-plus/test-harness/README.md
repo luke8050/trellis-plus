@@ -28,3 +28,9 @@ BASE=/path/to/a/trellis-initialized/project  bash test-harness/run-regression.sh
 - 随包样例 `assets/spec/plus-doc-samples/{prd,design}.md` 就是 lint-plan 的正例夹具：样例改坏，回归会失败。
 - 不连真实 ocr / mvn / 网络：`fake-ocr/ocr`（`FAKE_OCR_FINDINGS_FILE`、`FAKE_OCR_VERSION`、`FAKE_OCR_REJECT_BACKGROUND`）、`fake-mvn/mvn`（`FAKE_MVN_LOG`、`FAKE_MVN_FAIL`）。
 - `mkjava.sh` 造单模块 Java 场景；`fixtures/ocr/` 是各种形状的 OCR 报告；`fixtures/lint/` 是 implement / code-map 与 Java 源。
+
+## 注意（v2.1）
+
+- 直接用 `BASE=<GitHub 上的 trellis-opencode>` 运行时，BASE 里没有被 gitignore 的 `.trellis/.developer`；脚本默认导出 `TRELLIS_DEVELOPER=regression`，也可自行设置。
+- `fake-ocr/ocr`、`fake-mvn/mvn`、`mkjava.sh` 需要可执行位（经 GitHub 网页上传会丢失，需 `chmod +x` 或用 git 提交模式变更）。
+- `reverse_file` 可对安装器或 assets 做同样的“临时破坏后断言必须失败”对照。

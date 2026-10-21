@@ -17,6 +17,8 @@ Executes `ocr review --audience agent --format json --background-file <TASK_DIR>
 
 ## Triage (mandatory)
 
+First list the findings to the user with a proposed fix per finding and edit code only after they confirm (critical/high and anything that changes behaviour: always ask; medium/low: no change unless the user picks it). Then triage:
+
 Create/overwrite `<TASK_DIR>/reviews/ocr-triage.md`, ONE line per finding:
 
 ```markdown
@@ -37,7 +39,7 @@ Every finding needs a line; nothing may stay `[pending]`. Fix the code where the
 
 ## Rerun rule
 
-The first run is always allowed. A rerun is allowed only when the previous report had critical/high findings, after you fixed them (and re-ran 2.2 and 2.4), at most `ocr.maxRerun` (2) times. Medium/low findings are only triaged, never rerun. Verify with `node ./.trellis/plus/gate.mjs ocr --task <TASK_DIR>` (report newer than the last source change, every finding triaged). `--force` overrides the rerun rule: tell the user.
+The first run is always allowed. A rerun only verifies critical/high fixes: the previous report had critical/high findings, you fixed them (and re-ran 2.2 and 2.4), at most `ocr.maxRerun` (2) times. Fixing findings and then updating `ocr-triage.md` is enough: the report stays valid while no source file changed after the triage (its header `Report: ocr-r<N>.json` names the report), so medium/low fixes need no rerun. Verify with `node ./.trellis/plus/gate.mjs ocr --task <TASK_DIR>`. Never use `--force` to get around the limit: it needs `--reason "<why; the user approved>"`, is logged in `reviews/ocr-overrides.log` and warned about at every check. At the limit: stop and ask the user.
 
 ## Delegation mode (no working ocr / LLM)
 

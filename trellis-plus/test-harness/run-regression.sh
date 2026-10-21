@@ -21,6 +21,8 @@ TOOL="${TOOL:-$(dirname "$HERE")}"
 BASE="${BASE:?set BASE=/path/to/a/trellis-initialized/project}"
 WORK="$(mktemp -d /tmp/plus-reg.XXXXXX)"
 export TRELLIS_CONTEXT_ID=plusreg
+# BASE from git has no .trellis/.developer (gitignored): task.py create needs one
+export TRELLIS_DEVELOPER="${TRELLIS_DEVELOPER:-regression}"
 unset TRELLIS_PLUS_TASK TRELLIS_PLUS_SKIP_GATE
 PASS=0; FAIL=0; SKIP=0; LAST=""; RC=0
 export PATH="$HERE/fake-ocr:$HERE/fake-mvn:$PATH"
@@ -64,6 +66,22 @@ PY
   cp "$WORK/gate.orig" "$gf"
   "$@" >/dev/null 2>&1 || bad "reverse [$label]: check does not pass again after restoring gate.mjs"
 }
+# reverse_file <label> <relpath-in-tool> <count> <old> <new> <fn> [args]: mutate a file of a COPY of the tool (the installer or an asset);
+# <fn> gets the copy's directory as its LAST argument and must FAIL there (and pass with the real tool).
+reverse_file() {
+  local label="$1" rel="$2" cnt="$3" old="$4" new="$5"; shift 5
+  rm -rf "$WORK/toolmut"; cp -r "$TOOL" "$WORK/toolmut"
+  if ! F="$WORK/toolmut/$rel" OLD="$old" NEW="$new" CNT="$cnt" python3 - <<'PY'
+import os, sys
+f = os.environ["F"]; s = open(f, encoding="utf8").read()
+if s.count(os.environ["OLD"]) != int(os.environ["CNT"]): sys.exit(1)
+open(f, "w", encoding="utf8").write(s.replace(os.environ["OLD"], os.environ["NEW"]))
+PY
+  then bad "reverse [$label]: mutation anchor does not occur exactly $cnt time(s) in $rel"; rm -rf "$WORK/toolmut"; return; fi
+  if "$@" "$WORK/toolmut" >/dev/null 2>&1; then bad "reverse [$label]: the check still passes with the rule broken (useless test)"; else ok "reverse [$label]: check fails when the rule is broken"; fi
+  "$@" "$TOOL" >/dev/null 2>&1 || bad "reverse [$label]: the check does not pass with the real tool"
+  rm -rf "$WORK/toolmut"
+}
 
 gc() { git -c user.email=a@b -c user.name=t commit -q --no-verify "$@" >/dev/null 2>&1; }
 fresh() { rm -rf "$1"; cp -r "$BASE" "$1"; ( cd "$1" && git init -q . && git add -A >/dev/null 2>&1 && gc -m init ); }
@@ -75,6 +93,12 @@ use() { W="$1"; G="node $W/.trellis/plus/gate.mjs"; }
 mkproj() { fresh "$1"; node "$TOOL/trellis-plus.mjs" apply "$1" --all >/dev/null 2>&1
   mkdir -p "$1/src/main/java/com/acme"; cp "$HERE"/fixtures/lint/java/*.java "$1/src/main/java/com/acme/"
   ( cd "$1" && git add -A >/dev/null 2>&1 && gc -m plus ); use "$1"; }
+# setprof <profile>: set profile in the installed plus.config.json (groups that test blocking review/manifests gates use strict; the shipped default is standard)
+setprof() { python3 - "$W/.trellis/plus/plus.config.json" "$1" <<'PY3'
+import json, sys
+f = sys.argv[1]; d = json.load(open(f, encoding="utf8")); d["profile"] = sys.argv[2]; json.dump(d, open(f, "w", encoding="utf8"), indent=2)
+PY3
+}
 # tri <task> <round> <lines...>: write reviews/ocr-triage.md for ocr-r<round>.json
 tri() { local t="$1" n="$2"; shift 2; mkdir -p "$W/$t/reviews"; { printf 'Report: ocr-r%s.json\nRound: %s\n\n' "$n" "$n"; printf '%s\n' "$@"; } > "$W/$t/reviews/ocr-triage.md"; }
 SAMPLE="$TOOL/assets/spec/plus-doc-samples"; FX="$HERE/fixtures/lint"
@@ -126,6 +150,35 @@ run node "$TOOL/trellis-plus.mjs" apply "$W1" --all;           exit_is "apply --
 snap "$W1" > "$WORK/s1"; run node "$TOOL/trellis-plus.mjs" apply "$W1" --all; snap "$W1" > "$WORK/s2"
 cmp -s "$WORK/s1" "$WORK/s2" && ok "apply is idempotent" || bad "apply is idempotent"
 run node "$TOOL/trellis-plus.mjs" doctor "$W1";                exit_is "doctor passes after apply" 0
+cfgver() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("version"))' "$1/.trellis/plus/plus.config.json"; }
+[ "$(cfgver "$W1")" = "2.1.0" ] && ok "a fresh apply leaves plus.config.json with version 2.1.0" || bad "a fresh apply leaves plus.config.json with version 2.1.0"
+cp "$W1/.trellis/plus/plus.config.json" "$WORK/a.ver.cfg"
+python3 - "$W1/.trellis/plus/plus.config.json" <<'PY2'
+import json, sys
+f = sys.argv[1]; d = json.load(open(f)); d.pop("version"); d["ocr"]["maxRerun"] = 1; json.dump(d, open(f, "w"), indent=2)
+PY2
+run node "$TOOL/trellis-plus.mjs" doctor "$W1"; exit_is "doctor flags a plus.config.json without a version" 1; has "...and says what is wrong" "plus.config.json version is missing"
+run node "$TOOL/trellis-plus.mjs" apply "$W1" --all; exit_is "apply stamps the missing version" 0
+[ "$(cfgver "$W1")" = "2.1.0" ] && ok "...version is 2.1.0 again" || bad "...version is 2.1.0 again"
+[ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["ocr"]["maxRerun"])' "$W1/.trellis/plus/plus.config.json")" = "1" ] && ok "...and the user's own keys are untouched (ocr.maxRerun stays 1)" || bad "...and the user's own keys are untouched"
+sed -i 's/"version": "2.1.0"/"version": "2.0.0"/' "$W1/.trellis/plus/plus.config.json"
+run node "$TOOL/trellis-plus.mjs" doctor "$W1"; exit_is "doctor flags an older version" 1; has "...naming both versions" 'version is "2.0.0", this tool is 2.1.0'
+run node "$TOOL/trellis-plus.mjs" apply "$W1" --all; [ "$(cfgver "$W1")" = "2.1.0" ] && ok "apply upgrades 2.0.0 -> 2.1.0" || bad "apply upgrades 2.0.0 -> 2.1.0"
+cp "$WORK/a.ver.cfg" "$W1/.trellis/plus/plus.config.json"
+ver_stamped() { local t="$1" w="$WORK/vs"; fresh "$w"; node "$t/trellis-plus.mjs" apply "$w" --all >/dev/null 2>&1
+  python3 - "$w/.trellis/plus/plus.config.json" <<'PY3'
+import json, sys
+f = sys.argv[1]; d = json.load(open(f)); d.pop("version", None); json.dump(d, open(f, "w"), indent=2)
+PY3
+  node "$t/trellis-plus.mjs" apply "$w" --all >/dev/null 2>&1; [ "$(cfgver "$w")" = "2.1.0" ]; }
+chk 0 - ver_stamped "$TOOL" && ok "apply re-stamps the version (helper holds on the real tool)" || bad "apply re-stamps the version (helper)"
+reverse_file "apply stamps the version" trellis-plus.mjs 1 '  stampVersion()
+  let good = patchWorkflow()' '  let good = patchWorkflow()' ver_stamped
+no_grill_warning() { local t="$1" w="$WORK/ng"; fresh "$w"; local o; o="$(HOME="$WORK/emptyhome" node "$t/trellis-plus.mjs" apply "$w" --all 2>&1)"; ! echo "$o" | grep -qiE "grill-me|grilling"; }
+chk 0 - no_grill_warning "$TOOL" && ok "apply does not look for /grill-me or grilling (no warning when they are not installed)" || bad "apply does not look for /grill-me or grilling"
+reverse_file "no grill-me check at install" trellis-plus.mjs 1 '  stampVersion()
+  let good = patchWorkflow()' '  log.warn("skill \"grill-me\" not found")
+  let good = patchWorkflow()' no_grill_warning
 cp "$W1/.trellis/plus/plus.config.json" "$WORK/a.cfg"
 python3 - "$W1/.trellis/plus/plus.config.json" <<'PY2'
 import json, sys
@@ -321,9 +374,24 @@ f = sys.argv[1]; s = open(f, encoding="utf8").read()
 s = "\n".join(l for l in s.split("\n") if not l.startswith("| D")); open(f, "w", encoding="utf8").write(s)
 PY
 check "L: empty decision log fails" 1 "决策记录 has no D<n> row" $G align "$T"
-reverse "decision-log check (M/L)" 1 'else if (decs.length === 0) soft(' 'else if (false) soft(' chk 1 "决策记录 has no D<n> row" $G align "$T"
+reverse "decision-log check (M/L)" 1 'else if (decs.length === 0) {' 'else if (false) {' chk 1 "决策记录 has no D<n> row" $G align "$T"
 TSx="$(newtask "$W" als)"; $G tier "$TSx" S --reason "docs only change" >/dev/null; cp "$P" "$W/$TSx/prd.md"
 check "S: the same prd without decisions passes" 0 "PASS" $G align "$TSx"
+# a skipped clarification (e.g. /grill-me not installed): ONE line `无：<原因>` replaces the D<n> rows
+nodec() { goodprd; python3 - "$P" "$1" <<'PY'
+import re, sys
+f = sys.argv[1]; s = open(f, encoding="utf8").read()
+s = "\n".join(l for l in s.split("\n") if not l.startswith("| D"))
+s = re.sub(r"(^##[^\n]*决策记录[^\n]*\n)", lambda m: m.group(1) + "\n" + sys.argv[2] + "\n", s, count=1, flags=re.M)
+open(f, "w", encoding="utf8").write(s)
+PY
+}
+nodec "- 无：未安装 grill-me，需求已在对话中确认"
+check "L: a skipped clarification (one line 无：<原因>) is accepted, and says so" 0 "clarification skipped — 未安装 grill-me" $G align "$T"
+reverse "skipped clarification is accepted" 1 'const skip = stripComments(decSec.body).match(SKIP_CLARIFY_RE)' 'const skip = null' chk 0 "clarification skipped" $G align "$T"
+nodec "- 无：略"; check "L: a skip line without a real reason (< 6 chars) still fails" 1 "决策记录 has no D<n> row" $G align "$T"
+nodec "- 备注：未澄清，直接开始"; check "L: any other free text is not a skip line" 1 "决策记录 has no D<n> row" $G align "$T"
+goodprd
 reverse "S tier is exempt from the decision log" 1 'if (ti.tier !== "S") {
     if (!decSec)' 'if (true) {
     if (!decSec)' chk 0 "PASS" $G align "$TSx"
@@ -426,18 +494,18 @@ check "L: missing 数据库变更 chapter fails" 1 'design.md missing section "#
 reverse "数据库变更 is a required chapter" 1 '["数据库变更", "5 数据库变更"], ' '' chk 1 'missing section "## 5 数据库变更"' $G lint-plan "$T"
 good; python3 - "$D" <<'PY2'
 import sys
-f = sys.argv[1]; s = open(f, encoding="utf8").read(); a = s.index("## 5 数据库变更"); b = s.index("## 7 异常与边界"); open(f, "w", encoding="utf8").write(s[:a] + "## 5 数据库变更\n\n" + s[b:])
+f = sys.argv[1]; s = open(f, encoding="utf8").read(); a = s.index("## 5 数据库变更"); b = s.index("## 6 详细设计"); open(f, "w", encoding="utf8").write(s[:a] + "## 5 数据库变更\n\n" + s[b:])
 PY2
 check "an empty 数据库变更 chapter fails (write 无变更：原因)" 1 'section "5 数据库变更" is empty' $G lint-plan "$T"
 good; python3 - "$D" <<'PY2'
 import sys
-f = sys.argv[1]; s = open(f, encoding="utf8").read(); a = s.index("## 5 数据库变更"); b = s.index("## 7 异常与边界")
+f = sys.argv[1]; s = open(f, encoding="utf8").read(); a = s.index("## 5 数据库变更"); b = s.index("## 6 详细设计")
 open(f, "w", encoding="utf8").write(s[:a] + "## 5 数据库变更\n\n| 对象 | 变更类型 | 变更内容 | 兼容与回滚 | 对应R |\n| --- | --- | --- | --- | --- |\n| orders | 加字段 | ADD COLUMN dedup_key VARCHAR(64) NULL COMMENT '去重键' | 存量为空；回滚 DROP COLUMN | R1 |\n\n" + s[b:])
 PY2
 check "a real database change table passes" 0 "PASS" $G lint-plan "$T"
 good; python3 - "$D" <<'PY2'
 import sys
-f = sys.argv[1]; s = open(f, encoding="utf8").read(); a = s.index("## 5 数据库变更"); b = s.index("## 7 异常与边界")
+f = sys.argv[1]; s = open(f, encoding="utf8").read(); a = s.index("## 5 数据库变更"); b = s.index("## 6 详细设计")
 open(f, "w", encoding="utf8").write(s[:a] + "## 5 数据库变更\n\n| 对象 | 变更类型 | 变更内容 | 兼容与回滚 | 对应R |\n| --- | --- | --- | --- | --- |\n| 【填写：表名】 | 加字段 | x | y | R1 |\n\n" + s[b:])
 PY2
 check "an unfilled template row in 数据库变更 is a placeholder error" 1 "design.md:[0-9]+ unresolved placeholder" $G lint-plan "$T"
@@ -544,9 +612,13 @@ s = s.replace("| 并发提交 | 两请求同时通过查重 | 可能各插入一
 s = s.replace("## 12 开放问题\n\n无", "## 12 开放问题\n\n- [ ] 唯一索引何时立项")
 open(f, "w", encoding="utf8").write(s)
 PY
-check "style findings only warn: one design option" 0 "WARN  design.md 整体方案: compare at least two options" $G lint-plan "$T"
+check "整体方案 without any alternatives table passes (no comparison is required)" 0 "PASS" $G lint-plan "$T"
+hasnt "...and there is no 'compare at least two options' warning" "compare at least two options"
 has "...scenario without a test" 'WARN  design.md 异常与边界: scenario "并发提交" has no 对应测试'; has "...unchecked open question" "WARN  design.md 开放问题: 1 unchecked item"
-reverse "style: alternatives" 1 'if (alt && parseTable(alt.body).length < 2)' 'if (false)' chk 0 "compare at least two options" $G lint-plan "$T"
+no_alt_warning() { local o; o="$($G lint-plan "$T" 2>&1)"; ! echo "$o" | grep -q "compare at least two options"; }
+chk 0 - no_alt_warning && ok "...(helper holds on the intact gate)" || bad "no_alt_warning helper"
+reverse "整体方案 needs no alternatives table" 1 '  // 整体方案 holds only the chosen solution (summary + diagram): no alternatives table is required or checked' '  const alt = findSection(dSecs, "整体方案")
+  if (alt && parseTable(alt.body).length < 2) rep.warn("design.md 整体方案: compare at least two options (采用 + one rejected)")' chk 0 - no_alt_warning
 # legacy
 good; TLg="$(newtask "$W" lplegacy)"; echo x > "$W/$TLg/alignment.md"; cp "$SAMPLE/prd.md" "$W/$TLg/prd.md"; printf '# old\n\n## 1. Old section\ntext\n' > "$W/$TLg/design.md"; printf '# old plan\n' > "$W/$TLg/implement.md"
 check "legacy (v1.1) task: format findings are warnings, exit 0" 0 "legacy task: design.md missing section" $G lint-plan "$TLg"
@@ -558,7 +630,7 @@ fi
 ############################################################################################################
 if want F; then
 echo "== F. anchors / matrix / status / usage (0-token helpers)"
-mkproj "$WORK/f"; cd "$W"
+mkproj "$WORK/f"; cd "$W"; setprof strict
 T="$(mkplan hp L)"; D="$W/$T/design.md"; I="$W/$T/implement.md"; M="$W/$T/research/code-map.md"; good() { fill "$T" L; }
 check "anchors: the sample's anchors verify" 0 "4 distinct anchor\(s\) verified" $G anchors "$T"
 editall "$M" '搜索：`git grep -n "order_no"`' '搜索：待查'
@@ -595,7 +667,7 @@ fi
 ############################################################################################################
 if want G; then
 echo "== G. design-review (L): header, blocker/resolution consistency"
-mkproj "$WORK/g"; cd "$W"
+mkproj "$WORK/g"; cd "$W"; setprof strict
 T="$(mkplan dr L)"; R="$W/$T/reviews"; mkdir -p "$R"
 report() { # report <round> <blockers-in-header> <confirm> <rows-file-or-none>
   { printf '轮次：%s\n阻塞：%s\n需人工确认：%s\n\n## 1. 需求覆盖矩阵\n| 需求编号 | 摘要 | 对应模块 | 对应验收点 | 结论 |\n| --- | --- | --- | --- | --- |\n| R1 | 查重 | OrderService | 第二次创建失败 | 已覆盖 |\n\n## 2. 问题清单\n' "$1" "$2" "$3"
@@ -661,7 +733,7 @@ fi
 ############################################################################################################
 if want H; then
 echo "== H. hard gate: pre-start per tier and task.py start"
-mkproj "$WORK/h"; cd "$W"
+mkproj "$WORK/h"; cd "$W"; setprof strict
 real() { for k in implement check; do echo '{"file":".trellis/spec/backend/index.md","reason":"spec"}' >> "$W/$1/$k.jsonl"; done; }
 start() { ( cd "$W" && python3 .trellis/scripts/task.py start "$1" ); }
 tier_is() { python3 - "$W/$1/task.json" "$2" <<'PY'
@@ -967,7 +1039,7 @@ check "no findings: no triage file needed" 0 "findings: 0" $G ocr --task "$T6"
 T7="$(newtask "$W" o7)"; $G ocr --task "$T7" --run >/dev/null 2>&1; tri "$T7" 1 "- [fixed] OrderService.java:8 — [high] NPE — fixed" "- [fixed] OrderController.java:5 — [low] x — fixed"
 check "fresh report + triage passes" 0 "✓ PASS" $G ocr --task "$T7"
 sleep 1.3; echo "// edit" >> "$OS"
-check "a source edited after the report makes it STALE" 1 "report is STALE — 1 file\(s\) changed after it" $G ocr --task "$T7"
+check "a source edited after the report and its triage makes it STALE" 1 "report is STALE — 1 file\(s\) changed after the report and its triage" $G ocr --task "$T7"
 reverse "stale detection" 1 'if (stale.length) rep.error(' 'if (false) rep.error(' chk 1 "report is STALE" $G ocr --task "$T7"
 git checkout -q -- "$OS"; echo "x" >> .opencode/agents/trellis-check.md
 check "editing only .opencode/ does NOT make the report stale" 0 "✓ PASS" $G ocr --task "$T7"
@@ -984,15 +1056,46 @@ check "rerun 3 exceeds ocr.maxRerun=2 and is refused" 1 "would be rerun #3 \(> o
 [ ! -e "$W/$T8/reviews/ocr-r4.json" ] && ok "...and no report r4 was written" || bad "...and no report r4 was written"
 fourth_run_refused() { local t; t="$(newtask "$W" "cap$RANDOM")"; for n in 1 2 3; do tri "$t" $n "- [fixed] OrderService.java:8 — [critical] injection — fixed"; $G ocr --task "$t" --run >/dev/null 2>&1; done
   local o; o="$($G ocr --task "$t" --run 2>&1)"; local rc=$?; [ $rc -eq 1 ] && echo "$o" | grep -q "ocr.maxRerun=2" && [ ! -e "$W/$t/reviews/ocr-r4.json" ]; }
-reverse "rerun cap" 1 'if (n > 1 + oc.maxRerun) { rep.error(' 'if (false) { rep.error(' chk 0 - fourth_run_refused
-tri "$T8" 4 "- [fixed] OrderService.java:8 — [critical] injection — fixed for the last time"
-check "--force overrides the cap (the skill says: tell the user)" 0 "ocr-r4.json" $G ocr --task "$T8" --run --force
+reverse "rerun cap" 1 'const refused = n > 1 + oc.maxRerun' 'const refused = false && n > 1 + oc.maxRerun' chk 0 - fourth_run_refused
+mk3() { local t; t="$(newtask "$W" "f$RANDOM")"; for n in 1 2 3; do tri "$t" $n "- [fixed] OrderService.java:8 — [critical] injection — fixed"; $G ocr --task "$t" --run >/dev/null 2>&1; done; echo "$t"; }
+force_noreason() { local t o rc; t="$(mk3)"; o="$($G ocr --task "$t" --run --force 2>&1)"; rc=$?; [ $rc -eq 1 ] && echo "$o" | grep -q -- "--force needs --reason" && [ ! -e "$W/$t/reviews/ocr-r4.json" ]; }
+force_reason() { local t o rc; t="$(mk3)"; tri "$t" 4 "- [fixed] OrderService.java:8 — [critical] injection — fixed"; o="$($G ocr --task "$t" --run --force --reason "user approved a 4th round" 2>&1)"; rc=$?
+  [ $rc -eq 0 ] && [ -e "$W/$t/reviews/ocr-r4.json" ] && grep -q "user approved a 4th round" "$W/$t/reviews/ocr-overrides.log" && echo "$o" | grep -q "recorded in reviews/ocr-overrides.log"; }
+force_warned() { local t o; t="$(mk3)"; $G ocr --task "$t" --run --force --reason "user approved a 4th round" >/dev/null 2>&1; tri "$t" 4 "- [fixed] OrderService.java:8 — [critical] injection — fixed"
+  o="$($G ocr --task "$t" 2>&1)"; echo "$o" | grep -q "was used 1 time(s)"; }
+no_force_hint() { local t o; t="$(mk3)"; o="$($G ocr --task "$t" --run 2>&1)"; echo "$o" | grep -q "would be rerun #3" && ! echo "$o" | grep -q "override: --force"; }
+chk 0 - force_noreason && ok "--force without --reason is refused (no round 4 is written)" || bad "--force without --reason is refused"
+chk 0 - force_reason && ok "--force with --reason runs, is logged in reviews/ocr-overrides.log and says so" || bad "--force with --reason runs and is logged"
+chk 0 - force_warned && ok "a later check warns that --force was used" || bad "a later check warns that --force was used"
+chk 0 - no_force_hint && ok "the refusal no longer advertises --force" || bad "the refusal no longer advertises --force"
+reverse "--force needs a reason" 1 'if (why.length < 6) {' 'if (false) {' chk 0 - force_noreason
+reverse "--force is logged" 1 'appendFileSync(join(rdir, "ocr-overrides.log"), ' 'void (' chk 0 - force_reason
+reverse "--force use is warned about" 1 'if (ov && ov.trim()) rep.warn(' 'if (false) rep.warn(' chk 0 - force_warned
+reverse "refusal does not advertise --force" 1 ' — stop and ask the user`' ' — stop and ask the user (override: --force)`' chk 0 - no_force_hint
+# the dead end the 5-round run hit: fixing findings changes the source, so the report went STALE and only --force could get past it
+OSDEV="$W/$OS"
+fix_medium_ok() { local t o rc; t="$(newtask "$W" "fm$RANDOM")"; printf '{"comments":[{"file":"%s","line":2,"severity":"medium","message":"m"}]}' "$OS" > "$WORK/medium2.json"
+  FAKE_OCR_FINDINGS_FILE="$WORK/medium2.json" $G ocr --task "$t" --run >/dev/null 2>&1
+  sleep 1.3; echo "// fix" >> "$OSDEV"; sleep 1.3; tri "$t" 1 "- [fixed] OrderService.java:2 — [medium] m — fixed"
+  o="$($G ocr --task "$t" 2>&1)"; rc=$?; git checkout -q -- "$OS"; [ $rc -eq 0 ] && echo "$o" | grep -q "PASS"; }
+fix_after_cap_ok() { local t o rc; t="$(mk3)"; sleep 1.3; echo "// fix" >> "$OSDEV"; sleep 1.3; tri "$t" 3 "- [fixed] OrderService.java:8 — [critical] injection — fixed"
+  o="$($G ocr --task "$t" 2>&1)"; rc=$?; git checkout -q -- "$OS"; [ $rc -eq 0 ] && echo "$o" | grep -q "PASS"; }
+other_report_stale() { local t o rc; t="$(newtask "$W" "or$RANDOM")"; printf '{"comments":[{"file":"%s","line":2,"severity":"medium","message":"m"}]}' "$OS" > "$WORK/medium2.json"
+  FAKE_OCR_FINDINGS_FILE="$WORK/medium2.json" $G ocr --task "$t" --run >/dev/null 2>&1
+  sleep 1.3; echo "// fix" >> "$OSDEV"; sleep 1.3; tri "$t" 9 "- [fixed] OrderService.java:2 — [medium] m — fixed"
+  o="$($G ocr --task "$t" 2>&1)"; rc=$?; git checkout -q -- "$OS"; [ $rc -eq 1 ] && echo "$o" | grep -q "report is STALE"; }
+chk 0 - fix_medium_ok && ok "medium-only report: fixing it and updating the triage passes — no rerun, no --force" || bad "medium-only report: fix + triage passes"
+chk 0 - fix_after_cap_ok && ok "after the last allowed round: fixing the critical finding and updating the triage passes — no --force" || bad "after the last round: fix + triage passes"
+chk 0 - other_report_stale && ok "a triage that names a different report does not extend the baseline (STALE)" || bad "a triage naming another report keeps STALE"
+reverse "triage is the staleness baseline (medium)" 1 'base = Math.max(base, statSync(triFile).mtimeMs)' 'base = base' chk 0 - fix_medium_ok
+reverse "triage is the staleness baseline (last round)" 1 'base = Math.max(base, statSync(triFile).mtimeMs)' 'base = base' chk 0 - fix_after_cap_ok
+reverse "only a triage of THIS report counts" 1 '=== cur.n) base = Math.max(base' '!== 0) base = Math.max(base' chk 0 - other_report_stale
 unset FAKE_OCR_FINDINGS_FILE
 no_rerun_after_medium() { local t; t="$(newtask "$W" "nr$RANDOM")"; printf '{"comments":[{"file":"%s","line":2,"severity":"medium","message":"m"}]}' "$OS" > "$WORK/medium.json"
   tri "$t" 1 "- [fixed] OrderService.java:2 — [medium] m — fixed"; FAKE_OCR_FINDINGS_FILE="$WORK/medium.json" $G ocr --task "$t" --run >/dev/null 2>&1
   local o; o="$(FAKE_OCR_FINDINGS_FILE="$WORK/medium.json" $G ocr --task "$t" --run 2>&1)"; local rc=$?; [ $rc -eq 1 ] && echo "$o" | grep -q "has no critical/high finding, so no rerun is needed" && [ ! -e "$W/$t/reviews/ocr-r2.json" ]; }
 chk 0 - no_rerun_after_medium && ok "a rerun after a medium-only report is refused (no critical/high finding)" || bad "a rerun after a medium-only report is refused"
-reverse "rerun only after critical/high" 1 'if (!hasBlocking(cur0.path, oc)) { rep.error(' 'if (false) { rep.error(' chk 0 - no_rerun_after_medium
+reverse "rerun only after critical/high" 1 ': !hasBlocking(cur0.path, oc)' ': false' chk 0 - no_rerun_after_medium
 # background file
 mkbig() { local t="$1"
   python3 - "$W" "$t" <<'PY'
@@ -1218,6 +1321,41 @@ wf_bytes() { cat "$1/assets/workflow/index.md" "$1/assets/workflow/phase1.md" "$
 wf_budget() { [ "$(wf_bytes "$1")" -le 7000 ]; }
 LAST="$(wf_bytes "$TOOL")"; has "workflow blocks total $LAST bytes (v1.1: 9511)" "^[0-9]+$"
 check "workflow blocks stay within 7000 bytes (regression line for the token goal)" 0 - wf_budget "$TOOL"
+sec3_clean() { local d="$1" f
+  for f in "$d/assets/plus/templates/design.md" "$d/assets/spec/plus-doc-samples/design.md"; do
+    sed -n '/^## 3 /,/^## 4 /p' "$f" | grep -qE '^\| 方案 \|' && return 1
+    sed -n '/^## 3 /,/^## 4 /p' "$f" | grep -q '方案摘要' || return 1
+  done; return 0; }
+chk 0 - sec3_clean "$TOOL" && ok "design template and sample: 整体方案 holds only the chosen solution (no alternatives table)" || bad "design template/sample 整体方案 has no alternatives table"
+reverse_file "template 整体方案 has no table" assets/plus/templates/design.md 1 '- 方案摘要：【填写：三五句话说清本次采用的方案】
+
+' '- 方案摘要：【填写：三五句话说清本次采用的方案】
+
+| 方案 | 优点 | 缺点 | 结论 |
+| --- | --- | --- | --- |
+| A | x | y | 采用 |
+
+' sec3_clean
+reverse_file "sample 整体方案 has no table" assets/spec/plus-doc-samples/design.md 1 '## 3 整体方案
+
+' '## 3 整体方案
+
+| 方案 | 优点 | 缺点 | 结论 |
+| --- | --- | --- | --- |
+| A | x | y | 采用 |
+
+' sec3_clean
+wf_text() { local f="$1/assets/workflow"
+  grep -q 'Overrides `trellis-brainstorm`: in 1.1 do NOT write design.md / implement.md' "$f/index.md" && grep -q 'if absent or declined, skip it' "$f/index.md" \
+  && grep -q 'Do NOT edit yet' "$f/phase1.md" && grep -q 'only after they confirm' "$f/phase2.md" && grep -q 'Fixing, then updating the triage, is enough: no rerun' "$f/phase2.md" \
+  && grep -q -- '`--force` needs `--reason`' "$f/phase2.md"; }
+chk 0 - wf_text "$TOOL" && ok "workflow text: brainstorm override, optional /grill-me, list-then-confirm for review and OCR, fix+triage needs no rerun, --force needs a reason" || bad "workflow text for this version"
+reverse_file "workflow: brainstorm override" assets/workflow/index.md 1 'Overrides `trellis-brainstorm`: in 1.1' 'Note: in 1.1' wf_text
+reverse_file "workflow: grill-me is optional" assets/workflow/index.md 1 'if absent or declined, skip it' 'always ask the user to run it' wf_text
+reverse_file "workflow: review lists before editing" assets/workflow/phase1.md 1 'Do NOT edit yet' 'Edit at once' wf_text
+reverse_file "workflow: OCR lists before editing" assets/workflow/phase2.md 1 'only after they confirm' 'at once' wf_text
+reverse_file "workflow: fix + triage needs no rerun" assets/workflow/phase2.md 1 'Fixing, then updating the triage, is enough: no rerun.' 'Fixing needs a rerun.' wf_text
+reverse_file "workflow: --force needs a reason" assets/workflow/phase2.md 1 '`--force` needs `--reason`' '`--force` is fine' wf_text
 mkdir -p "$WORK/fat/assets/workflow"; cp "$TOOL"/assets/workflow/*.md "$WORK/fat/assets/workflow/"; python3 -c "print('x'*3000)" >> "$WORK/fat/assets/workflow/phase1.md"
 check "reverse: bloated workflow blocks are rejected" 1 - wf_budget "$WORK/fat"
 # Phase 1 flow: one step per line, in execution order, and it says outright that the ids are not a sequence
@@ -1296,8 +1434,14 @@ PY2
 }
 cp "$W/.trellis/plus/plus.config.json" "$WORK/n.cfg"
 T="$(mkplan sw L)"
-check "gates lists all 7 gates, profile strict, everything blocking by default" 0 "profile: strict" $G gates
-LAST="$($G gates 2>&1)"; has "...align / lintPlan / designReview / manifests / test / ocr / hook all 'error'" "(align +error.*\n.*){0}lintPlan +error"; [ "$(echo "$LAST" | grep -cE '^  [a-zA-Z]+ +error ')" = "7" ] && ok "...exactly 7 gate lines with mode error" || { bad "...exactly 7 gate lines with mode error"; show; }
+check "gates lists all 7 gates; the default profile is standard" 0 "profile: standard" $G gates
+LAST="$($G gates 2>&1)"; [ "$(echo "$LAST" | grep -cE '^  [a-zA-Z]+ +error ')" = "5" ] && [ "$(echo "$LAST" | grep -cE '^  designReview +warn ')" = "1" ] && [ "$(echo "$LAST" | grep -cE '^  manifests +off ')" = "1" ] && ok "...standard: 5 gates error, designReview warn, manifests off" || { bad "...standard: 5 gates error, designReview warn, manifests off"; show; }
+std_manifests_off() { setcfg '{"profile":"standard"}'; local o; o="$($G gates 2>&1)"; setcfg '{}'; echo "$o" | grep -qE '^  manifests +off '; }
+reverse "standard profile skips manifests" 1 'standard: { designReview: "warn", manifests: "off" }' 'standard: { designReview: "warn", manifests: "warn" }' chk 0 - std_manifests_off
+setcfg '{}' # no profile key: the default comes from gate.mjs itself
+reverse "default profile is standard" 1 'profile: "standard",' 'profile: "strict",' chk 0 "profile: standard" $G gates
+setcfg '{"profile":"strict"}'; LAST="$($G gates 2>&1)"; [ "$(echo "$LAST" | grep -cE '^  [a-zA-Z]+ +error ')" = "7" ] && ok "...strict: exactly 7 gate lines with mode error" || { bad "...strict: exactly 7 gate lines with mode error"; show; }
+setcfg '{}'
 has "...and says what can never be switched off" "Always on, not switchable"
 setcfg '{"profile":"light","gates":{"ocr":"error"}}'; LAST="$($G gates 2>&1)"; has "light profile: designReview off, source shown" "designReview +off +\[profile light\]"; has "...an explicit gates.ocr beats the profile" "ocr +error +\[gates.ocr\]"
 setcfg '{}'
@@ -1315,7 +1459,7 @@ reverse "gates.<name> overrides the profile" 1 'if (cfg.gates && cfg.gates[name]
 setcfg '{"gates":{"lintPlan":"off"}}'
 check "gates.lintPlan=off: not run, one note" 0 "skipped: lintPlan is off \(gates.lintPlan\)" $G lint-plan "$T"
 reverse "off skips the gate" 1 'if (gateMode(cfg, name) === "off") return skippedReport(title, name)' 'if (false) return skippedReport(title, name)' chk 0 "skipped: lintPlan is off" $G lint-plan "$T"
-setcfg '{}'; sed -i '$d' "$W/$T/design.md"; sed -i '$d' "$W/$T/design.md"
+setcfg '{"profile":"strict"}'; sed -i '$d' "$W/$T/design.md"; sed -i '$d' "$W/$T/design.md"
 # design-review (L) missing report
 check "strict: an L task without a review report fails design-review" 1 "reviews/design-review.md missing" $G design-review "$T"
 setcfg '{"gates":{"designReview":"off"}}'
@@ -1323,10 +1467,14 @@ check "gates.designReview=off: skipped" 0 "skipped: designReview is off" $G desi
 setcfg '{"gates":{"designReview":"warn"}}'
 check "gates.designReview=warn: shown as a warning" 0 "WARN  \(gates.designReview=warn, would block otherwise\) reviews/design-review.md missing" $G design-review "$T"
 # pre-start (the hard gate behind task.py start) honours the switches
-setcfg '{}'
+setcfg '{"profile":"strict"}'
 check "pre-start strict: the missing review blocks" 1 "reviews/design-review.md missing" $G pre-start "$T"
+setcfg '{}'
+check "pre-start with the DEFAULT profile (standard): a missing review is a warning, start is allowed" 0 "gates.designReview=warn" $G pre-start "$T"
+reverse "default profile reaches pre-start" 1 'profile: "standard",' 'profile: "strict",' chk 0 "gates.designReview=warn" $G pre-start "$T"
 setcfg '{"profile":"standard"}'
-check "pre-start profile standard: review and manifests are warnings, start is allowed" 0 "gates.designReview=warn" $G pre-start "$T"
+check "pre-start profile standard: designReview is a warning, start is allowed" 0 "gates.designReview=warn" $G pre-start "$T"
+LAST="$($G pre-start "$T" 2>&1)"; has "...and manifests is skipped in standard" "skipped: manifests is off \(profile standard\)"
 reverse "pre-start applies the switches" 1 'reps.push(runGate("designReview", cfg, "design-review", () => designReview(taskDir, cfg, ti)))' 'reps.push(designReview(taskDir, cfg, ti))' chk 0 "gates.designReview=warn" $G pre-start "$T"
 setcfg '{"profile":"light"}'
 check "pre-start profile light: design review and manifests are skipped" 0 "skipped: designReview is off \(profile light\)" $G pre-start "$T"
@@ -1356,7 +1504,7 @@ setcfg '{"gates":{"align":"maybe"}}'; check "an invalid mode is a usage error (e
 setcfg '{"profile":"loose"}'; check "an unknown profile is a usage error (exit 2)" 2 'profile "loose" is unknown' $G gates
 reverse "config validation" 1 '  checkGates(cfg)
   return cfg' '  return cfg' chk 2 "is unknown" $G gates
-setcfg '{}'; check "restored: default config is valid" 0 "profile: strict" $G gates
+setcfg '{}'; check "restored: default config is valid" 0 "profile: standard" $G gates
 # test gate / hook on the Java scenario
 fresh "$WORK/n2"; node "$TOOL/trellis-plus.mjs" apply "$WORK/n2" --all >/dev/null 2>&1
 ( cd "$WORK/n2" && git add -A >/dev/null 2>&1 && gc -m plus ); bash "$HERE/mkjava.sh" "$WORK/n2" yes >/dev/null; use "$WORK/n2"; cd "$W"

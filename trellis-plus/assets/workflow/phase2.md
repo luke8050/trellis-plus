@@ -16,6 +16,6 @@ Runs after 2.4 passes. Load the `plus-ocr-review` skill.
 node ./.trellis/plus/gate.mjs ocr --task {TASK_DIR} --run
 ```
 
-Triage every finding into `{TASK_DIR}/reviews/ocr-triage.md`: `fixed`, `false-positive` or `deferred`. **critical / high cannot be deferred**; a false-positive on them must cite code evidence (`path:line`). Rerun (after 2.2 → 2.4) only when critical/high findings were fixed, at most 2 reruns. Verify with `node ./.trellis/plus/gate.mjs ocr --task {TASK_DIR}`. Show the user any `deferred` item before commit.
+List the findings to the user with a proposed fix each and edit code only after they confirm (medium/low: no change unless they pick it). Triage every finding into `{TASK_DIR}/reviews/ocr-triage.md`: `fixed`, `false-positive` or `deferred`. **critical / high cannot be deferred**; a false-positive on them must cite code evidence (`path:line`). Fixing, then updating the triage, is enough: no rerun. Rerun (after 2.2 → 2.4) only to verify critical/high fixes, at most 2; `--force` needs `--reason` and the user's approval. Verify with `node ./.trellis/plus/gate.mjs ocr --task {TASK_DIR}`. Show the user any `deferred` item before commit.
 
-Before 3.4: `node ./.trellis/plus/gate.mjs pre-commit --task {TASK_DIR}` must exit 0; the git hook runs the same checks on the staged files.
+At 3.4 the git hook checks tests + OCR triage (no hook: run `gate.mjs pre-commit --task {TASK_DIR}` first).

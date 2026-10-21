@@ -1,4 +1,5 @@
 {
+  "version": "2.1.0",
   "_comment": "trellis-plus v2 config. Project-owned: `apply` never overwrites this file. Only keys you set override the defaults in gate.mjs. v1.x keys (alignment, planning.idMode, planning.minAnchors, planning.minSectionChars, planning.maxReviewRounds, ocr.maxRounds, ocr.minVersion, ocr.minGitVersion) are ignored.",
   "tiers": {
     "budget": {

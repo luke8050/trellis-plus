@@ -2,7 +2,7 @@
 /**
  * trellis-plus v2 — enhance a `trellis init`-ed project (OpenCode platform) with:
  *   0. tiers S/M/L chosen by a human: small tasks stay cheap, only L gets the full flow
- *   1. clarification with the user (`/grill-me`) recorded in prd.md + a code-grounded design.md / implement.md at reviewable granularity
+ *   1. clarification with the user (optional `/grill-me`) recorded in prd.md + a code-grounded design.md / implement.md at reviewable granularity
  *   2. mandatory unit tests for every changed Java Service/Controller (JUnit5 + Mockito, Maven multi-module)
  *   3. ONE independent design reviewer (L tier) with a mechanical blocker/resolution check
  *   4. alibaba/open-code-review step with severity-aware triage before commit
@@ -26,13 +26,12 @@
 import {
   existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, copyFileSync, rmSync, chmodSync, realpathSync,
 } from "node:fs"
-import { homedir } from "node:os"
 import { join, resolve, dirname, relative, sep } from "node:path"
 import { createHash } from "node:crypto"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 
-const TOOL_VERSION = "2.0.0"
+const TOOL_VERSION = "2.1.0"
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ASSETS = join(HERE, "assets")
 
@@ -164,10 +163,10 @@ const blockRe = (n) => new RegExp(`${BEGIN(n)}[\\s\\S]*?${END(n)}\\n\\n`)
 // Per-turn text: each [plus] line is injected on EVERY turn, so keep the lines of one block under ~400 characters in total.
 const BREADCRUMBS = {
   planning: [
-    "[plus] Tier first (human decides): `node ./.trellis/plus/gate.mjs tier <TASK_DIR> S|M|L --reason \"…\"`. M/L: [L: code map via trellis-research], tell the user to type /grill-me, record D<n> in prd.md, `gate.mjs align`. New session: 1.6 draft → `lint-plan`; L: 1.7 review (max 2 rounds). `gate.mjs status <TASK_DIR>` = next step. No `task.py start` before the gates pass.",
+    "[plus] Tier first (user chooses): `node ./.trellis/plus/gate.mjs tier <TASK_DIR> S|M|L --reason \"…\"`. Overrides trellis-brainstorm: no design.md/implement.md now (1.6 writes them, new session); read code via code-map/grep only. M/L: suggest /grill-me (skip if absent), record D<n> in prd.md (or `无：原因`), `gate.mjs align`. 1.6 draft → `lint-plan`; L: 1.7 review. `gate.mjs status <TASK_DIR>` = next.",
   ],
   in_progress: [
-    "[plus] After trellis-check: 2.4 `node ./.trellis/plus/gate.mjs test --task <TASK_DIR> --run`, then 2.5 `gate.mjs ocr --task <TASK_DIR> --run` + triage (critical/high: fix, or false-positive with `path:line`; rerun only after such fixes, max 2). Before commit: `gate.mjs pre-commit --task <TASK_DIR>`; the git hook re-checks.",
+    "[plus] After trellis-check: 2.4 `node ./.trellis/plus/gate.mjs test --task <TASK_DIR> --run`, then 2.5 `gate.mjs ocr --task <TASK_DIR> --run`. List findings + proposed fixes, edit only after the user confirms; triage each (critical/high: fix, or false-positive with `path:line`); rerun only to verify critical/high fixes (max 2; no --force without the user). Commit: the git hook re-checks.",
   ],
 }
 
@@ -417,20 +416,6 @@ function hookState() {
   return first.startsWith("#!") && !SH_SHEBANG.test(first) ? "foreign" : "missing"
 }
 
-/** where OpenCode-style skills may live (project, then user-global); layout per OpenCode / Claude conventions — not verified here */
-function findSkill(name) {
-  const home = homedir()
-  const dirs = [abs(".opencode/skills"), abs(".claude/skills"), abs(".agents/skills"), join(home, ".config/opencode/skills"), join(home, ".claude/skills"), join(home, ".agents/skills")]
-  return dirs.map((d) => join(d, name, "SKILL.md")).find((f) => existsSync(f)) ?? null
-}
-
-/** `/grill-me` (which loads `grilling`) is typed by the user in step 1.1 of M/L tasks; trellis-plus neither copies nor wraps them. */
-function warnSkills() {
-  for (const n of ["grill-me", "grilling"]) {
-    if (!findSkill(n)) log.warn(`skill "${n}" not found in the project or your home skill folders — M/L tasks use it for the clarification (step 1.1); install it where your OpenCode can load it`)
-  }
-}
-
 // ───────────── commands ─────────────
 
 function preflight() {
@@ -448,12 +433,26 @@ function preflight() {
   return ok
 }
 
+/** plus.config.json is project-owned: apply only (re)writes its `version` key, text-level, so every other key and the layout stay as the user left them. */
+function stampVersion() {
+  const rel = `${P.plusDir}/plus.config.json`
+  const cur = readRel(rel)
+  if (cur === null) return
+  let doc
+  try { doc = JSON.parse(cur) } catch { log.warn(`${rel} is not valid JSON — version not stamped`); return }
+  if (doc && doc.version === TOOL_VERSION) return
+  let next = typeof doc?.version === "string" ? cur.replace(/("version"\s*:\s*)"[^"]*"/, (_, p) => `${p}"${TOOL_VERSION}"`) : cur.replace(/^\{/, `{\n  "version": "${TOOL_VERSION}",`)
+  try { if (JSON.parse(next).version !== TOOL_VERSION) throw new Error("x") } catch { next = JSON.stringify({ version: TOOL_VERSION, ...doc }, null, 2) + "\n" }
+  writeIf(rel, next)
+  log.ok(`${rel}: version ${TOOL_VERSION}${doc?.version ? ` (was ${doc.version})` : ""}`)
+}
+
 function cmdApply() {
   console.log(`trellis-plus apply${DRY ? " (dry-run)" : ""}`)
   if (!preflight()) return 2
   const manifest = loadManifest()
   const prev = manifest.options ?? {}
-  if (opt("align-skill")) log.warn("--align-skill is gone in v2: clarification uses /grill-me (typed by the user); the option is ignored")
+  if (opt("align-skill")) log.warn("--align-skill is gone in v2: clarification uses /grill-me when you have it (optional, skipped if not installed); the option is ignored")
   const opts = {
     hardGate: ALL || flag("hard-gate") || !!prev.hardGate,
     patchPlugin: ALL || flag("patch-plugin") || !!prev.patchPlugin,
@@ -462,13 +461,13 @@ function cmdApply() {
     gitHook: ALL || flag("git-hook") || !!prev.gitHook,
   }
   installFiles(manifest)
+  stampVersion()
   let good = patchWorkflow()
   if (opts.hardGate) good = patchTaskPy() && good; else if (exists(P.taskpy)) log.info("hard gate not enabled (add --hard-gate to make `task.py start` enforce the tier gates)")
   if (opts.patchPlugin) good = patchPlugin() && good
   if (opts.tuneContext) good = patchConfig() && good
   if (opts.patchAgents) good = patchAgents() && good; else log.info("agent prompts untouched (add --patch-agents so trellis-implement/trellis-check always get the unit-test rules)")
   if (opts.gitHook) good = installHook(manifest) && good; else log.info("git hook not installed (add --git-hook for the commit-time safety net)")
-  warnSkills()
   manifest.version = TOOL_VERSION
   manifest.options = opts
   if (!DRY) writeRel(P.manifest, JSON.stringify(manifest, null, 2) + "\n")
@@ -503,9 +502,9 @@ function cmdDoctor() {
     if (st === "missing") problems.push("git pre-commit hook missing or outdated")
     else if (st === "foreign") log.warn("git pre-commit hook is not a shell script: add `node .trellis/plus/gate.mjs pre-commit --hook` to it manually (trellis-plus never edits it)")
   }
-  warnSkills()
   try {
     const cfg = JSON.parse(readRel(`${P.plusDir}/plus.config.json`) ?? "{}")
+    if (cfg.version !== TOOL_VERSION) problems.push(`plus.config.json version is ${cfg.version ? `"${cfg.version}"` : "missing"}, this tool is ${TOOL_VERSION} (apply stamps it)`)
     const old = [cfg.alignment && "alignment", cfg.planning?.idMode && "planning.idMode", cfg.planning?.minAnchors !== undefined && "planning.minAnchors", cfg.planning?.minSectionChars && "planning.minSectionChars", cfg.planning?.maxReviewRounds !== undefined && "planning.maxReviewRounds", cfg.ocr?.maxRounds !== undefined && "ocr.maxRounds", cfg.ocr?.minVersion !== undefined && "ocr.minVersion", cfg.ocr?.minGitVersion !== undefined && "ocr.minGitVersion"].filter(Boolean)
     if (old.length) log.warn(`plus.config.json still has v1.x key(s) that v2 ignores: ${old.join(", ")} (see the shipped plus.config.json for the v2 keys)`)
   } catch { log.warn("plus.config.json is not valid JSON") }

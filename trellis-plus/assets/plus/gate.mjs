@@ -17,7 +17,7 @@
  *   usage <task> [--phase <name> --tokens <n> [--note <text>]]   record / sum the tokens spent per phase
  *   pre-start <task>       tier-aware gate behind `task.py start`
  *   test [--task <t>] [--base <ref>] [--staged] [--run]   every changed Service/Controller needs a unit test (Maven multi-module)
- *   ocr  [--task <t>] [--run] [--inspect] [--force]       run / verify alibaba open-code-review + severity-aware triage
+ *   ocr  [--task <t>] [--run] [--inspect] [--force --reason "<why>"]       run / verify alibaba open-code-review + severity-aware triage
  *   pre-commit [--task <t>] [--run] [--hook]   test + ocr (--hook = git pre-commit mode: staged files only)
  *   gates                  list every gate, its switch (profile / gates.* in plus.config.json) and what it checks (0 tokens)
  *   lightweight <task> --reason "<why>"   deprecated alias of `tier <task> S`
@@ -121,7 +121,7 @@ const GATES = {
 }
 const PROFILES = {
   strict: {},
-  standard: { designReview: "warn", manifests: "warn" },
+  standard: { designReview: "warn", manifests: "off" },
   light: { lintPlan: "warn", designReview: "off", manifests: "off", ocr: "warn" },
 }
 const GATE_MODES = ["error", "warn", "off"]
@@ -513,6 +513,7 @@ function anchorsGate(taskDir, cfg) {
 // ───────────────────────── align (prd.md) ─────────────────────────
 
 const NONE_RE = /^(无|无。|none\.?|—|-)$/i
+const SKIP_CLARIFY_RE = /^\s*(?:[-*]\s*)?无[:：]\s*(\S.{5,})\s*$/m // 决策记录 may hold one line `无：<原因 >= 6 chars>` when the clarification was skipped
 
 /** Items of a section: table rows (first cell) and list lines. */
 function sectionItems(body) {
@@ -574,7 +575,11 @@ function alignGate(taskDir, cfg, ti = taskTier(taskDir)) {
   const decs = decSec ? parseTable(decSec.body).filter((r) => /^D\d+$/.test(String(Object.values(r)[0] ?? "").trim())) : []
   if (ti.tier !== "S") {
     if (!decSec) soft('prd.md: missing section "决策记录" (M/L: one row per clarified conclusion: D<n> | 问题 | 结论 | 来源 | 影响)')
-    else if (decs.length === 0) soft("prd.md: 决策记录 has no D<n> row — M/L tasks record what was clarified with the user")
+    else if (decs.length === 0) {
+      const skip = stripComments(decSec.body).match(SKIP_CLARIFY_RE)
+      if (skip) rep.note(`prd.md 决策记录: clarification skipped — ${skip[1].trim().slice(0, 60)}`)
+      else soft("prd.md: 决策记录 has no D<n> row — M/L tasks record what was clarified with the user (or one line `无：<原因>` when the clarification was skipped, e.g. /grill-me is not installed)")
+    }
   }
   for (const d of decs) {
     const id = Object.values(d)[0]
@@ -671,8 +676,7 @@ function lintPlan(taskDir, cfg, ti = taskTier(taskDir)) {
   if (mod && modRows.length) for (const q of reqIds) if (!covered.has(q)) rep.error(`${q} has no module in design.md 模块拆分 (a requirement without a module is an omission)`)
   const cov = findSection(dSecs, "覆盖矩阵")
   if (cov) for (const q of reqIds) if (!new RegExp(`\\b${q}\\b`).test(cov.body)) soft(`${q} is missing from design.md 覆盖矩阵`)
-  const alt = findSection(dSecs, "整体方案")
-  if (alt && parseTable(alt.body).length < 2) rep.warn("design.md 整体方案: compare at least two options (采用 + one rejected)")
+  // 整体方案 holds only the chosen solution (summary + diagram): no alternatives table is required or checked
   const exc = findSection(dSecs, "异常与边界")
   if (exc) for (const r of parseTable(exc.body)) if (!col(r, ["对应测试", "测试"]).trim()) rep.warn(`design.md 异常与边界: scenario "${col(r, ["场景"])}" has no 对应测试`)
 
@@ -1281,9 +1285,19 @@ function ocrGate(taskDir, cfg, opts = {}) {
     const cur0 = latestOcr(rdir)
     const n = (cur0?.n ?? 0) + 1
     // Budget rule: the first run is free; a rerun only makes sense after critical/high findings were fixed, and is capped.
-    if (cur0 && !opts.force) {
-      if (n > 1 + oc.maxRerun) { rep.error(`ocr round ${n} would be rerun #${n - 1} (> ocr.maxRerun=${oc.maxRerun}) — stop and let the human decide (override: --force)`); return rep }
-      if (!hasBlocking(cur0.path, oc)) { rep.error(`ocr-r${cur0.n}.json has no ${oc.blockingSeverities.join("/")} finding, so no rerun is needed — triage the medium/low findings instead (override: --force)`); return rep }
+    if (cur0) {
+      const refused = n > 1 + oc.maxRerun
+        ? `ocr round ${n} would be rerun #${n - 1} (> ocr.maxRerun=${oc.maxRerun}) — stop and ask the user`
+        : !hasBlocking(cur0.path, oc)
+          ? `ocr-r${cur0.n}.json has no ${oc.blockingSeverities.join("/")} finding, so no rerun is needed — triage the findings (fixing them and updating ocr-triage.md is enough); if you still think a new review is needed, ask the user`
+          : ""
+      if (refused) {
+        if (!opts.force) { rep.error(refused); return rep }
+        const why = typeof opts.reason === "string" ? opts.reason.trim() : ""
+        if (why.length < 6) { rep.error(`--force needs --reason "<why, and that the user approved it>" (>= 6 chars) — ${refused}`); return rep }
+        appendFileSync(join(rdir, "ocr-overrides.log"), `${new Date().toISOString()} round ${n}: ${why} (overrode: ${refused.split(" — ")[0]})\n`)
+        rep.warn(`--force used for round ${n} (${why}) — recorded in reviews/ocr-overrides.log; tell the user before commit`)
+      }
     }
     // Availability = `ocr llm test` (is an LLM provider configured and reachable?). No version or git checks, no install hints.
     let why = ""
@@ -1350,10 +1364,15 @@ function ocrGate(taskDir, cfg, opts = {}) {
     return rep
   }
 
-  // stale: any changed *source* file newer than the report
-  const mtime = statSync(cur.path).mtimeMs
-  const stale = changedFiles("HEAD").filter((f) => isSource(f, oc) && existsSync(resolve(ROOT, f)) && statSync(resolve(ROOT, f)).mtimeMs > mtime + 1000)
-  if (stale.length) rep.error(`report is STALE — ${stale.length} file(s) changed after it (e.g. ${stale.slice(0, 3).join(", ")}). Re-run with --run`)
+  // stale: a changed *source* file newer than the report AND than its triage. Fixing a finding changes the source and the triage is
+  // written after the fix, so a triage that names THIS report is the baseline (fixing findings needs no rerun, hence no --force).
+  let base = statSync(cur.path).mtimeMs
+  const triFile = join(rdir, "ocr-triage.md")
+  if (existsSync(triFile) && Number((read(triFile).match(/^Report:\s*ocr-r(\d+)\.json/mi) || [])[1]) === cur.n) base = Math.max(base, statSync(triFile).mtimeMs)
+  const stale = changedFiles("HEAD").filter((f) => isSource(f, oc) && existsSync(resolve(ROOT, f)) && statSync(resolve(ROOT, f)).mtimeMs > base + 1000)
+  if (stale.length) rep.error(`report is STALE — ${stale.length} file(s) changed after the report and its triage (e.g. ${stale.slice(0, 3).join(", ")}). Fixed findings → update reviews/ocr-triage.md (header \`Report: ocr-r${cur.n}.json\`); a rerun only verifies critical/high fixes and is capped by ocr.maxRerun`)
+  const ov = read(join(rdir, "ocr-overrides.log"))
+  if (ov && ov.trim()) rep.warn(`--force was used ${ov.trim().split("\n").length} time(s) (reviews/ocr-overrides.log): the OCR round budget was exceeded — tell the user`)
 
   const bySev = Object.fromEntries(SEV_ORDER.map((s) => [s, findings.filter((f) => f.severity === s).length]))
   rep.note(`findings: ${findings.length} (${SEV_ORDER.map((s) => `${s} ${bySev[s]}`).join(", ")})`)

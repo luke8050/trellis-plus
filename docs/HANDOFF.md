@@ -61,14 +61,14 @@
 | S：只 prd，**不得改 Service/Controller**；M：≤3 个 Service/Controller、同一模块；L：其余 | 方案 §2；规则由 `tier`、`lint-plan`、`test` 三处强制 |
 | 步骤只有 **1.6 起草、1.7 评审**，无 1.8；定级与澄清写在 index 块与面包屑 | 1.5 是 Trellis 原生步骤；少一个步骤号少一条面包屑 |
 | 澄清用用户手动输入 `/grill-me`（AI 不能加载） | 该 skill 带 `disable-model-invocation`（来自旧会话抓取摘要，**未在 OpenCode 实测**） |
-| OCR：首次不计，仅 critical/high 修复后可重跑，**最多重跑 2 次**（`ocr.maxRerun`），`--force` 越过 | 方案里 `maxRounds=1/2` 几处写法不一致，按此解释（**用户未逐字确认**） |
+| OCR：首次不计，仅 critical/high 修复后可重跑，**最多重跑 2 次**（`ocr.maxRerun`），`--force` 越过（v2.1：须带 `--reason`，记入 `ocr-overrides.log`） | 方案里 `maxRounds=1/2` 几处写法不一致，按此解释（**用户未逐字确认**） |
 | `design-review.md` 覆盖写；第 2 轮前主会话把旧版另存为 `design-review.r1.md` | 保持 reviewer 的输出路径固定 |
 | 报告头 `阻塞：N` 必须与表格里"阻塞"行数一致 | 方案之外新增的机械核对，防头部被写错 |
 | `--tune-context` 不再属于 `--all` | v2 文档合计 ≤ 60 KB，落在默认注入上限（32768/65536/131072 字节）内 |
 | 只做一级追溯：PRD 的 `R<n>` → design 模块拆分/覆盖矩阵 → implement 测试矩阵 | 方案"砍 ID 链" |
 
 ### 1.6 与方案/旧交接文字不一致之处（已按 §1.5 处理）
-- 方案 §9 写"`apply --drill-me <path>` 复制 skill、≤40 行兜底协议"，但 §4/§11 明确不复制不兜底 → **按后者**（只检测 `grill-me`/`grilling` 是否存在，缺失告警）。
+- 方案 §9 写"`apply --drill-me <path>` 复制 skill、≤40 行兜底协议"，但 §4/§11 明确不复制不兜底 → **按后者**（只检测 `grill-me`/`grilling` 是否存在，缺失告警；**v2.1 已删除该检测**）。
 - 旧 HANDOFF 说 golden sample 是独立文件；实际在 `design-review-grilling.md` 内且未脱敏 → 已改做虚构通用样例。
 
 ## 2. 开发进度
@@ -160,7 +160,7 @@
 
 **与我先前口头方案的偏离（请用户知悉）**：我曾说"`pre-start` 不再重跑 lint-plan"。实际**保留**了 pre-start 对计划类门禁的复查（它是 `task.py start` 的唯一权威检查；去掉会放过 lint-plan 之后改过的文档），改为删除工作流里手工重复的 `lint-plan`，并提供开关。需要更激进可设 `profile: light`/`gates.lintPlan: off`。
 
-**回归**：`BASE=base bash test-harness/run-regression.sh` → **547 通过 / 0 失败 / 1 跳过**（跳过=v1.1 升级用例，缺 `V11_TOOL`），日志 `evidence/f-full-4.log`（`f-full-2.log` 的 538 是修正 `--output` 之前的版本）。反向对照共 147 条出现。源码 sha256 前 16 位（最终）：gate.mjs f434c12e5f6efc41、trellis-plus.mjs bd3b56ed60589195、run-regression.sh 674a4aeb04a9d718。
+**回归**：`BASE=base bash test-harness/run-regression.sh` → **594 通过 / 0 失败 / 1 跳过**（v2.1；原 547 记录在 §7 之后曾因默认 profile 改动未同步而失效，见 §8）（跳过=v1.1 升级用例，缺 `V11_TOOL`），日志 `evidence/f-full-4.log`（`f-full-2.log` 的 538 是修正 `--output` 之前的版本）。反向对照共 147 条出现。源码 sha256 前 16 位（最终）：gate.mjs f434c12e5f6efc41、trellis-plus.mjs bd3b56ed60589195、run-regression.sh 674a4aeb04a9d718。
 
 **未验证**：真实 `ocr` 的 `--output`/`--audience`/`--background-file`/退出码、`ocr llm test` 的真实退出码语义（假设 0=可用）、委托模式在真实 OpenCode 里的执行效果、critical 级别的真实报告形状、真实 Maven（按用户决定未处理）、CodeGraph、reviewer 对新 design 结构的真实评审效果、`profile` 预设（standard/light）取值是我的建议，用户未逐项确认。
 **注意**：`real-partial.json` 是脱敏/改写后的 6 条合成样例，不是原始输出；原始输出（13 条、含公司路径）未放进交付物。
@@ -180,7 +180,7 @@
 ### 3.2 `trellis-plus.mjs` 关键点
 - `managedFiles()` 列出随包文件（含新增的 `assets/commands/`）；`pruneObsolete(manifest)` 清理 v1.1 遗留（sha 未变才删，本地改过的保留并告警）；`pruneEmptyDirs`。
 - `patchPlugin`：`CTX_ORIG`（原文）、`CTX_V11`、`CTX_NEW`（`plus-design-reviewer`）三态，升级时 v1.1 → v2 改写；`unpatchPlugin` 两种都能还原。
-- `warnSkills()`：仅检测 `grill-me`/`grilling` 是否存在，缺失告警；`--align-skill` 只提示已移除。
+- `warnSkills()`：仅检测 `grill-me`/`grilling` 是否存在，**v2.1 已删除**；`--align-skill` 只提示已移除。
 - `doctor` 额外检查：`get_context --step 1.6/1.7/2.4/2.5` 可解析；`plus.config.json` 里 v1.x 键（`alignment`、`planning.idMode`、`planning.minAnchors`、`planning.minSectionChars`、`planning.maxReviewRounds`、`ocr.maxRounds`）只告警。
 - 选项：`--dry-run --hard-gate --patch-plugin --tune-context --patch-agents --git-hook --all --force`；`--all` 会改写 `.git/hooks/pre-commit` 与两个 agent 文件。
 - `trellis update` 可能覆盖这些补丁 → 需 `doctor --fix`（沿用 v1.1 约定）。
@@ -207,7 +207,7 @@ OCR：`ocrGate`、`extractFindings`、`parseTriage`、`matchEntry`、`hasCodeEvi
 - **pre-start**：S = align+manifests；M = +lint-plan；L = +design-review。`manifests` 要求 implement/check.jsonl 在 `[plus]` 之外还有真实条目。`TRELLIS_PLUS_SKIP_GATE=1` 绕过。
 - **lint-plan 的 error（真实性类）**：占位符、锚点（文件/行范围/符号窗口 ±15）、必需章节缺失/为空、PRD 的 R 在模块拆分/覆盖矩阵缺失或引用了不存在的 R、影响分析无处置或高引用数未标高风险、implement 路径不存在且步骤未标新增、被改 Service/Controller 在测试矩阵缺类或缺 正常/边界/异常、体积（prd 10240、design M 12288/L 30720、implement 20480、code-map 20480、合计 61440 字节）、M 级 >3 类或跨模块。warn：备选方案不足 2、异常场景无测试、开放问题未勾选、R 无测试行。
 - **单测门禁**：命中 `testGate.include`（`*Controller|*Service|*ServiceImpl.java`）→ 测试路径由 `testPathMap` 把 `src/main/java` 换成 `src/test/java`（保留模块前缀）+ `Test`/`Tests`；`Impl` 后缀可去；测试文件须本次改过且含 `@Test|@ParameterizedTest|@RepeatedTest|@TestFactory`；纯接口跳过；`--staged`（只看 index）/`--base <ref>`；`methodLevel` 默认 `warn`；`--run` 按模块（最近的 `pom.xml` 目录）分组执行 `runCommand`，根模块用 `runCommandRoot`；静态检查失败则不运行 mvn。
-- **OCR**：critical/high 不可 deferred、误报须引用存在的 `path:line`；medium/low 误报理由 ≥10 字；缺 severity 视为 medium；报告早于任何已改源文件 >1s 即 STALE（只改 `.opencode/` 不算）；第 N 次重跑要求上一份报告含 critical/high，且 N ≤ 1+`maxRerun`；背景 ≤ `backgroundMaxChars`(3000 字符)，按"丢豁免→文件→决策→需求"收缩。`--inspect` 打印提取到的 findings 与所用键。
+- **OCR**：critical/high 不可 deferred、误报须引用存在的 `path:line`；medium/low 误报理由 ≥10 字；缺 severity 视为 medium；源文件比“报告与其分诊中较新者”晚 >1s 即 STALE（v2.1 前基准只有报告）（只改 `.opencode/` 不算）；第 N 次重跑要求上一份报告含 critical/high，且 N ≤ 1+`maxRerun`；背景 ≤ `backgroundMaxChars`(3000 字符)，按"丢豁免→文件→决策→需求"收缩。`--inspect` 打印提取到的 findings 与所用键。
 - **任务选择**：`--task` > `TRELLIS_PLUS_TASK`（无效值=用法错误 exit 2）> `task.py current --json` 的会话任务 > **唯一** in_progress 任务（排除 `00-bootstrap-*`）；多个且无提示 → 不猜：hook 里 OCR 降为告警，命令行报错；hook 下无任务 → OCR 跳过并提示。
 - **hook**：`pre-commit --hook` 只看已暂存文件；暂存里没有源码文件直接放行；`hook.runTests`（默认 false）才在 hook 里跑 mvn。
 
@@ -282,3 +282,51 @@ OCR：`ocrGate`、`extractFindings`、`parseTriage`、`matchEntry`、`hasCodeEvi
 **未改**：implement 上限仍 20 KB；OCR / 单测逻辑保持 micro 原样。
 
 文档已同步：根目录与 `trellis-plus/docs/` 下的《方案介绍》《使用说明》、README、本 HANDOFF、优化进度。
+
+
+## 8. v2.1 会话进度（2026-10-16）
+
+**来源**：从 GitHub `luke8050/trellis-plus`（`6ffd7fd`）克隆；旧会话文件均不存在。交付方式：只给 zip（用户确认），不推送。
+
+### 8.1 接手时发现的事实（与旧 HANDOFF 的差异）
+
+- §7 把默认 profile 改成 standard、DB 变更章节挪到 §5、workflow 加了文案后**没有同步回归**，547/0/1 不成立。直接跑是 285/365；设 `TRELLIS_DEVELOPER` + 补可执行位后是 525/31/1。
+- 环境原因：GitHub 上的 BASE 没有被 gitignore 的 `.trellis/.developer`（`task.py create` 失败）；`test-harness/fake-ocr/ocr`、`fake-mvn/mvn`、`mkjava.sh` 在 git 里是 100644（丢了可执行位）。已处理：脚本默认导出 `TRELLIS_DEVELOPER=regression`；本包里已 `chmod +x`（若再经 GitHub 网页上传会再次丢失，需用 git 提交模式变更）。
+- 31 条失败的真实原因均为测试过期：G/H/F/N 组仍假设默认 strict（现 `setprof strict` 显式设置；N 组改验默认 = standard 并补反向对照）；E 组三处夹具把 `## 6 详细设计` 一并删掉；workflow 块 7031 > 7000 字节。
+- `TOOL_VERSION` 原为 `"2.0.0"`，文档称 v2.1；现 `2.1.0`。
+
+### 8.2 用户确认的决定
+
+版本号 `"2.1.0"`、字段名 `version`；只交付 zip；OCR 用方案 A（分诊为过期基准）+ `--force` 审计；`maxRerun` 保持 2；评审/OCR“先列后改”只改文案、不加门禁；需求 8 只做第 1 档，**第 2 档（lint-plan 推迟到 start）不做**（L 级评审会花在有硬伤的文档上，M 级用户批准后可能返工）。
+
+### 8.3 任务进度
+
+| 任务 | 状态 | 改动 / 证据 |
+|---|---|---|
+| P0 回归基线 | 完成 | `run-regression.sh`：默认 `TRELLIS_DEVELOPER`、`setprof`、E 组夹具、N 组默认 profile 断言 |
+| 需求 1 README | 完成 | 根 `README.md`（新增）；`trellis-plus/README.md` 同步 |
+| 需求 2 版本号 | 完成 | `TOOL_VERSION=2.1.0`；`stampVersion()` 只改 `version` 键；`doctor` 核对；`plus.config.json` 带 `version`；测试：新装、升级补键且不动用户键、2.0.0→2.1.0、doctor 报警 + 反向对照（`reverse_file`） |
+| 需求 3 去 grill-me 判断 | 完成 | 删 `findSkill`/`warnSkills`/`homedir`；workflow/面包屑改“建议，可跳过”；`align` 接受 `- 无：<原因 ≥6 字>`（`SKIP_CLARIFY_RE`）；测试含正例、过短/其他文本反例、反向对照 |
+| 需求 4 design §3 | 完成 | 模板与样例删方案比较表；删 gate 的“≥2 方案”告警；测试改为“单方案无告警”并保留反向对照（把旧检查放回去必须失败） |
+| 需求 5 先列后改 | 完成（文案） | workflow 1.7 / 2.5、`plus-ocr-review` skill、面包屑；不加门禁（“用户已确认”无法机械验证） |
+| 需求 6 少读代码 | 完成（文案）；**效果未实测** | 根因：原生 `trellis-brainstorm` 第 1 步写初稿、每轮重新取证、第 6 步在澄清会话里就写 design/implement，与 1.6 重复。workflow 与面包屑加“覆盖 brainstorm”：不提前写 design/implement、prd 澄清后一次定稿、只读 code-map/定点 grep。**能否在真实 OpenCode 里压过 skill 原文未验证；真实 token 节省未测（建议用 `gate usage` 记一个真实任务）** |
+| 需求 7 OCR 5 轮 | 完成 | 见 §8.4 |
+| 需求 8 第 1 档 | 完成 | standard 下 `manifests` 改 `off`；workflow 去掉手工 `pre-commit` 步骤（hook 兜底，没装 hook 才手工跑）；workflow 块 7031→6975 字节（回归线 7000） |
+
+### 8.4 需求 7 的根因与修法
+
+**根因（读代码得出，并由反向对照复现）**：`ocr` 校验把“有源文件比报告新”一律判为 STALE，而修复 finding 必然改源文件；重跑却只在“上一轮有 critical/high 且未超 `maxRerun`”时允许。结果是：① 只修 medium/low → STALE，又因“无 critical/high”不能重跑；② 修完最后一轮的 critical/high → STALE，又超上限。两条路都只剩 `--force`，且报错文案本身写着 `(override: --force)`。AI 没报备是失职，但规则没有留合法出口。把 `base = Math.max(base, triage mtime)` 改回 `base = base`（反向对照）时，这两个场景都会 STALE，等于复现了原问题。
+
+**修法**：① STALE 基准 = 报告与“其头部 `Report: ocr-r<N>.json` 指向本报告”的分诊中较新者（修复后写分诊即可通过，之后再改代码仍 STALE）；② `--force` 越过重跑规则须带 `--reason`（≥6 字），写入 `reviews/ocr-overrides.log`，之后每次 `ocr` 校验都告警；③ 拒绝提示去掉“(override: --force)”，改为“stop and ask the user”。**已知取舍**：AI 可在写分诊前顺手改别的代码，由 test 门禁与 hook 兜底。**未覆盖**：报告 0 finding 后又改代码仍 STALE 且不可重跑（只能 `--force --reason`），这是有意让人决定。
+
+### 8.5 验证结果
+
+- `node --check` 两个 .mjs 通过；`bash -n run-regression.sh` 通过。
+- 回归（假 ocr / 假 mvn / 夹具）：**594 通过 / 0 失败 / 1 跳过**，156 条反向对照；跳过项为 v1.1→v2 升级用例（缺 `V11_TOOL`）。
+- **未验证**：真实 ocr（退出码、critical 报告）、真实 Maven、CodeGraph、真实 OpenCode 中 skills/agents/`/grill-me`/面包屑覆盖 brainstorm 的行为、真实 token 用量。
+
+### 8.6 下一步
+
+1. 内网跑一个真实 L 级任务（N3），用 `gate usage` 按阶段记 token，核对需求 6 的效果与“覆盖 brainstorm”是否生效。
+2. 若效果不足，再评估第 3 档（implement.md 并入 design）、L 级评审改可选、`review.maxRounds` 降到 1、合并 2.2 check 与 2.4。
+3. `docs/orc命令输出.txt` 含内网主机名与项目路径，仓库公开前请脱敏。

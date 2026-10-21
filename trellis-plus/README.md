@@ -1,4 +1,4 @@
-# trellis-plus v2
+# trellis-plus v2.1
 
 给已经 `trellis init` 的项目（OpenCode 平台，Trellis 0.6.17）加一层**确定性门禁 + 分级流程**的 Node 脚本。零依赖，Node >= 18，Java 8 + Maven 多模块 + JUnit5 + Mockito 项目为目标环境。
 
@@ -15,7 +15,7 @@ node trellis-plus.mjs doctor <project> [--fix]    # 每次 `trellis update` 之�
 node trellis-plus.mjs revert <project> [--purge]
 ```
 
-`<project>` 是含 `.trellis/` 与 `.opencode/` 的目录，工具本身放哪都行。`apply` 幂等；升级自 v1.1 时会清理 v1.1 装过而 v2 不再提供的文件（本地改过的保留并告警）。需要 `/grill-me`、`grilling` 两个 skill（你自己装，缺失只告警）。
+`<project>` 是含 `.trellis/` 与 `.opencode/` 的目录，工具本身放哪都行。`apply` 幂等；升级自 v1.1 时会清理 v1.1 装过而 v2 不再提供的文件（本地改过的保留并告警）。`/grill-me` 是**可选**的澄清助手（你自己装；没装就跳过，安装时不再检查）。`apply` 会把版本号（现为 `2.1.0`）写入 `plus.config.json` 的 `version`（只改这一个键），`doctor` 会核对。
 
 ## 新流程
 
@@ -29,7 +29,7 @@ node trellis-plus.mjs revert <project> [--purge]
 
 ```
 Phase 1  按下列顺序执行（编号是 Trellis 的步骤 id，不是先后序号）：
-         1.0 创建任务 + 定级（AI 建议 → 用户选 → gate tier） → [L] 1.2 勘探(code-map) → 1.1 用户输入 /grill-me 澄清，结论记入 prd.md 决策记录，gate align
+         1.0 创建任务 + 定级（AI 建议 → 用户选 → gate tier） → [L] 1.2 勘探(code-map) → 1.1 澄清（建议输入 /grill-me，没装可跳过；结论记入 prd.md 决策记录，没有可写 `无：原因`），gate align
          → [新会话] 1.6 起草 design/implement，gate lint-plan → [L，新会话] 1.7 评审(≤2 轮)，gate design-review
          → 1.3 配置上下文 → 1.4 start（硬门禁复查）
 Phase 2  2.1 实现 → 2.2 check → 2.4 单测门禁 → 2.5 OCR（critical/high 修复后才重跑，最多 2 次）
@@ -53,7 +53,7 @@ Phase 3  gate pre-commit → 提交（git hook 再查一遍已暂存文件）
 | `gates` | 列出每个门禁的开关（profile / `gates.*`）、当前生效值和检查内容（0 token） |
 | `matrix` / `usage` / `status` | 覆盖矩阵、按阶段记 token、状态与下一步（均不耗 token） |
 | `test [--run] [--base] [--staged]` | 每个被改 Service/Controller 要有同模块、本次改过、含 `@Test` 的单测；Service 方法名近似检查；`--run` 按模块执行 mvn |
-| `ocr [--run] [--inspect] [--force]` | 先 `ocr llm test`，可用则跑 alibaba/open-code-review，否则降级为委托模式（agent 自己审并写同格式报告）；按严重级别分诊（同文件同行的多条 finding 需逐条分诊）；报告过期、`summary.comments` 与条数不符即失败；`status: partial` 告警并点名未审文件；不校验 ocr/git 版本 |
+| `ocr [--run] [--inspect] [--force --reason "<原因>"]` | 先 `ocr llm test`，可用则跑 alibaba/open-code-review，否则降级为委托模式（agent 自己审并写同格式报告）；按严重级别分诊（同文件同行的多条 finding 需逐条分诊）；报告过期（有源文件比报告**及其分诊**更新；修完 finding 再更新分诊即可，无需重跑；`--force` 越过重跑上限须带 `--reason`，记入 `reviews/ocr-overrides.log`）、`summary.comments` 与条数不符即失败；`status: partial` 告警并点名未审文件；不校验 ocr/git 版本 |
 | `pre-commit [--hook]` | test + ocr；`--hook` 只看已暂存文件 |
 
 任务选择（hook/OCR）：`--task` > `TRELLIS_PLUS_TASK` > 会话任务 > **唯一**的 in_progress 任务（Trellis 自带的 `00-bootstrap-*` 不计）；多个且无提示时不猜：hook 里 OCR 降为告警，命令行报错。绕过：`TRELLIS_PLUS_SKIP_GATE=1`。
@@ -67,14 +67,14 @@ Phase 3  gate pre-commit → 提交（git hook 再查一遍已暂存文件）
 | `align` | 1.1 后、`task.py start` | prd：已对齐、待确认清零、决策记录(M/L)、R<n> 编号、占位符、体积 | error | error | error |
 | `lintPlan` | 1.6 后、`task.py start` | design/implement 真实性（锚点、章节、R 覆盖、影响分析、测试矩阵）、体积、M 级限制 | error | error | warn |
 | `designReview` | 1.7 后、`task.py start`（L） | 评审报告头与表格一致、每个阻塞有回应 | error | warn | off |
-| `manifests` | `task.py start` | implement/check.jsonl 有真实 spec 条目 | error | warn | off |
+| `manifests` | `task.py start` | implement/check.jsonl 有真实 spec 条目 | error | off | off |
 | `test` | 2.4、pre-commit、hook | 每个被改 Service/Controller 有同模块、本次改过的 JUnit5 单测；S/M 级限制 | error | error | error |
 | `ocr` | 2.5、pre-commit、hook | OCR 报告存在、未过期、每条 finding 已分诊 | error | error | warn |
 | `hook` | `git commit` | 整个 git pre-commit hook | error | error | error |
 
 始终开启、不可关：`task.py start` 前必须已定级；退出码约定；`TRELLIS_PLUS_SKIP_GATE=1` 是唯一的整体绕过。
 
-**减少重复校验**：`task.py start` 是计划类门禁的唯一权威复查；工作流不再要求手工重复 `lint-plan`。单测的**正式运行（`test --run`）只在 2.4 做一次**，implement / check 子 agent 只做静态检查（不跑 Maven），`pre-commit` 也只做静态检查。
+**减少重复校验**：`task.py start` 是计划类门禁的唯一权威复查；工作流不再要求手工重复 `lint-plan`。单测的**正式运行（`test --run`）只在 2.4 做一次**，implement / check 子 agent 只做静态检查（不跑 Maven），`pre-commit` 也只做静态检查；流程文案不再要求手工 `pre-commit`，由 git hook 在提交时检查（没装 hook 才需手工跑）。
 
 ## 配置 `.trellis/plus/plus.config.json`（项目所有，apply 不会覆盖）
 
@@ -88,9 +88,19 @@ Phase 3  gate pre-commit → 提交（git hook 再查一遍已暂存文件）
 
 - **ocr 报告结构已按 v1.9.8 的一份真实输出校准**（`comments[]`：path/content/start_line/severity…）；命令行参数已按 `ocr review --help` 校准（真实 ocr **没有 `--output`**，报告走 stdout，由 gate 存成 `ocr-r<N>.json`；`--audience agent`、`--format json`、`-B/--background-file` 均存在）、`ocr llm test` 的成功输出已见过；失败时的退出码与 ocr 在真实运行中的退出码语义仍**未验证**，样例只含 medium/high/low，未见过 critical。
 - **真实 Maven 未验证**：运行命令只用假 mvn 验证了拼装、分组与退出码（本次按用户决定不处理单测优化，保持现状）。
-- **CodeGraph 未验证**；`/grill-me` 的触发是人手动输入。
+- **CodeGraph 未验证**；`/grill-me` 可选，由人手动输入。
 - 方法级单测检查按方法名近似，Controller 只按文件检查。
+
+## v2.1 变更
+
+- 版本号写入 `plus.config.json`（`version`）；`doctor` 核对。
+- 安装不再检查 `/grill-me`；流程里只“建议”使用，没装可跳过，决策记录可写 `无：原因`。
+- design.md「整体方案」只写本次方案（摘要 + 图），不再要求方案比较表；对应告警已删除。
+- 设计评审与 OCR：先列问题与修改方案，用户确认后才改（只改流程文案，不加门禁）。
+- OCR 过期判定以“报告与其分诊中较新者”为基准：修复 finding 并更新分诊即可通过，不再需要重跑或 `--force`；`--force` 需 `--reason` 并留审计记录，拒绝提示里不再推荐它。
+- 澄清阶段覆盖 `trellis-brainstorm`：不提前写 design/implement，prd 一次定稿，只通过 code-map / 定点 grep 读代码。
+- standard 档下 `manifests` 关闭；流程不再要求手工 `pre-commit`。
 
 ## 开发与交接
 
-回归：`BASE=<trellis init 出来的项目> [V11_TOOL=<v1.1 目录>] bash test-harness/run-regression.sh`，说明见 `test-harness/README.md`。交接记录见上级目录的 `HANDOFF.md` §7。
+回归：`TRELLIS_DEVELOPER=<名字> BASE=<trellis init 出来的项目> [V11_TOOL=<v1.1 目录>] bash test-harness/run-regression.sh`，说明见 `test-harness/README.md`。交接记录见仓库 `docs/HANDOFF.md`。

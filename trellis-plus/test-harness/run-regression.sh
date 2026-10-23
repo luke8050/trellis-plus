@@ -19,6 +19,7 @@
 HERE="$(cd "$(dirname "$0")" && pwd)"
 TOOL="${TOOL:-$(dirname "$HERE")}"
 BASE="${BASE:?set BASE=/path/to/a/trellis-initialized/project}"
+BASE="$(cd "$BASE" && pwd)" || { echo "BASE is not a directory: $BASE" >&2; exit 2; }   # absolute: the suite cd's around, a relative BASE breaks every group after the first
 WORK="$(mktemp -d /tmp/plus-reg.XXXXXX)"
 export TRELLIS_CONTEXT_ID=plusreg
 # BASE from git has no .trellis/.developer (gitignored): task.py create needs one
@@ -151,7 +152,10 @@ snap "$W1" > "$WORK/s1"; run node "$TOOL/trellis-plus.mjs" apply "$W1" --all; sn
 cmp -s "$WORK/s1" "$WORK/s2" && ok "apply is idempotent" || bad "apply is idempotent"
 run node "$TOOL/trellis-plus.mjs" doctor "$W1";                exit_is "doctor passes after apply" 0
 cfgver() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("version"))' "$1/.trellis/plus/plus.config.json"; }
-[ "$(cfgver "$W1")" = "2.1.0" ] && ok "a fresh apply leaves plus.config.json with version 2.1.0" || bad "a fresh apply leaves plus.config.json with version 2.1.0"
+# tv <tool dir>: the version in that tool's package.json (the single source of the tool version)
+tv() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]+"/package.json"))["version"])' "$1"; }
+TV="$(tv "$TOOL")"
+[ "$(cfgver "$W1")" = "$TV" ] && ok "a fresh apply leaves plus.config.json with the package.json version ($TV)" || bad "a fresh apply leaves plus.config.json with the package.json version ($TV; got $(cfgver "$W1"))"
 cp "$W1/.trellis/plus/plus.config.json" "$WORK/a.ver.cfg"
 python3 - "$W1/.trellis/plus/plus.config.json" <<'PY2'
 import json, sys
@@ -159,21 +163,57 @@ f = sys.argv[1]; d = json.load(open(f)); d.pop("version"); d["ocr"]["maxRerun"] 
 PY2
 run node "$TOOL/trellis-plus.mjs" doctor "$W1"; exit_is "doctor flags a plus.config.json without a version" 1; has "...and says what is wrong" "plus.config.json version is missing"
 run node "$TOOL/trellis-plus.mjs" apply "$W1" --all; exit_is "apply stamps the missing version" 0
-[ "$(cfgver "$W1")" = "2.1.0" ] && ok "...version is 2.1.0 again" || bad "...version is 2.1.0 again"
+[ "$(cfgver "$W1")" = "$TV" ] && ok "...version is $TV again" || bad "...version is $TV again"
 [ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["ocr"]["maxRerun"])' "$W1/.trellis/plus/plus.config.json")" = "1" ] && ok "...and the user's own keys are untouched (ocr.maxRerun stays 1)" || bad "...and the user's own keys are untouched"
-sed -i 's/"version": "2.1.0"/"version": "2.0.0"/' "$W1/.trellis/plus/plus.config.json"
-run node "$TOOL/trellis-plus.mjs" doctor "$W1"; exit_is "doctor flags an older version" 1; has "...naming both versions" 'version is "2.0.0", this tool is 2.1.0'
-run node "$TOOL/trellis-plus.mjs" apply "$W1" --all; [ "$(cfgver "$W1")" = "2.1.0" ] && ok "apply upgrades 2.0.0 -> 2.1.0" || bad "apply upgrades 2.0.0 -> 2.1.0"
+sed -i "s/\"version\": \"$TV\"/\"version\": \"2.0.0\"/" "$W1/.trellis/plus/plus.config.json"
+run node "$TOOL/trellis-plus.mjs" doctor "$W1"; exit_is "doctor flags an older version" 1; has "...naming both versions" "version is \"2.0.0\", this tool is $TV"
+run node "$TOOL/trellis-plus.mjs" apply "$W1" --all; [ "$(cfgver "$W1")" = "$TV" ] && ok "apply upgrades 2.0.0 -> $TV" || bad "apply upgrades 2.0.0 -> $TV"
 cp "$WORK/a.ver.cfg" "$W1/.trellis/plus/plus.config.json"
 ver_stamped() { local t="$1" w="$WORK/vs"; fresh "$w"; node "$t/trellis-plus.mjs" apply "$w" --all >/dev/null 2>&1
   python3 - "$w/.trellis/plus/plus.config.json" <<'PY3'
 import json, sys
 f = sys.argv[1]; d = json.load(open(f)); d.pop("version", None); json.dump(d, open(f, "w"), indent=2)
 PY3
-  node "$t/trellis-plus.mjs" apply "$w" --all >/dev/null 2>&1; [ "$(cfgver "$w")" = "2.1.0" ]; }
+  node "$t/trellis-plus.mjs" apply "$w" --all >/dev/null 2>&1; [ "$(cfgver "$w")" = "$(tv "$t")" ]; }
 chk 0 - ver_stamped "$TOOL" && ok "apply re-stamps the version (helper holds on the real tool)" || bad "apply re-stamps the version (helper)"
 reverse_file "apply stamps the version" trellis-plus.mjs 1 '  stampVersion()
   let good = patchWorkflow()' '  let good = patchWorkflow()' ver_stamped
+# the version comes from package.json: change it in a COPY of the tool and the stamped value must follow (not a constant)
+ver_follows() { local t="$1" c="$WORK/tvcopy" w="$WORK/vf"; rm -rf "$c"; cp -r "$t" "$c"
+  python3 - "$c/package.json" <<'PY3'
+import json, sys
+f = sys.argv[1]; d = json.load(open(f)); d["version"] = "9.9.9"; json.dump(d, open(f, "w"), indent=2)
+PY3
+  fresh "$w"; node "$c/trellis-plus.mjs" apply "$w" --all >/dev/null 2>&1; [ "$(cfgver "$w")" = "9.9.9" ] && node "$c/trellis-plus.mjs" doctor "$w" >/dev/null 2>&1; }
+chk 0 - ver_follows "$TOOL" && ok "the stamped version follows package.json (copy set to 9.9.9: config says 9.9.9, doctor passes)" || bad "the stamped version follows package.json (copy set to 9.9.9)"
+reverse_file "version is read from package.json" trellis-plus.mjs 1 '  TOOL_VERSION = doc.version' '  TOOL_VERSION = "2.1.0"' ver_follows
+# the shipped config no longer carries a second, hard-coded version
+[ "$(grep -c '"version"' "$TOOL/assets/plus/plus.config.json")" = "0" ] && ok "assets/plus/plus.config.json has no hard-coded version (package.json is the only source)" || bad "assets/plus/plus.config.json has no hard-coded version"
+# unreadable / invalid package.json: apply and doctor stop with exit 2, say why, and write nothing; --help still works
+ver_bad() { local mode="$1" cmd="$2" t="$3" c="$WORK/tvbad" w="$WORK/vb"; rm -rf "$c"; cp -r "$t" "$c"
+  case "$mode" in
+    missing) rm "$c/package.json" ;;
+    invalid) echo '{ not json' > "$c/package.json" ;;
+    nover)   echo '{"name":"x"}' > "$c/package.json" ;;
+    badver)  echo '{"version":"latest"}' > "$c/package.json" ;;
+  esac
+  fresh "$w"; snap "$w" > "$WORK/vb.before"
+  run node "$c/trellis-plus.mjs" $cmd "$w" --all; ver_bad_rc=$RC; ver_bad_out="$LAST"
+  snap "$w" > "$WORK/vb.after"
+  [ "$ver_bad_rc" = "2" ] && echo "$ver_bad_out" | grep -qE 'cannot read the tool version|"version" must be a semver' && cmp -s "$WORK/vb.before" "$WORK/vb.after" && [ ! -e "$w/.trellis/plus" ]; }
+for m in missing invalid nover badver; do
+  chk 0 - ver_bad "$m" apply "$TOOL" && ok "apply with package.json '$m' exits 2, explains, and writes nothing" || bad "apply with package.json '$m' exits 2, explains, and writes nothing"
+done
+chk 0 - ver_bad missing doctor "$TOOL" && ok "doctor with a missing package.json exits 2 as well" || bad "doctor with a missing package.json exits 2 as well"
+ver_bad_dry() { local t="$1" c="$WORK/tvbad2" w="$WORK/vb2"; rm -rf "$c"; cp -r "$t" "$c"; rm "$c/package.json"; fresh "$w"
+  node "$c/trellis-plus.mjs" apply "$w" --dry-run >/dev/null 2>&1; [ $? -eq 2 ]; }
+chk 0 - ver_bad_dry "$TOOL" && ok "apply --dry-run with a missing package.json also exits 2" || bad "apply --dry-run with a missing package.json also exits 2"
+ver_help_ok() { local t="$1" c="$WORK/tvbad3"; rm -rf "$c"; cp -r "$t" "$c"; rm "$c/package.json"; node "$c/trellis-plus.mjs" -h 2>&1 | grep -q "Usage"; }
+chk 0 - ver_help_ok "$TOOL" && ok "-h works without package.json (help does not need the version)" || bad "-h works without package.json"
+ver_bad_missing_t() { ver_bad missing apply "$1"; }; ver_bad_semver_t() { ver_bad badver apply "$1"; }
+reverse_file "package.json errors stop apply" trellis-plus.mjs 1 '  if (!loadToolVersion()) return false
+' '' ver_bad_missing_t
+reverse_file "a non-semver version is rejected" trellis-plus.mjs 1 '!SEMVER_RE.test(doc.version)' 'false' ver_bad_semver_t
 no_grill_warning() { local t="$1" w="$WORK/ng"; fresh "$w"; local o; o="$(HOME="$WORK/emptyhome" node "$t/trellis-plus.mjs" apply "$w" --all 2>&1)"; ! echo "$o" | grep -qiE "grill-me|grilling"; }
 chk 0 - no_grill_warning "$TOOL" && ok "apply does not look for /grill-me or grilling (no warning when they are not installed)" || bad "apply does not look for /grill-me or grilling"
 reverse_file "no grill-me check at install" trellis-plus.mjs 1 '  stampVersion()

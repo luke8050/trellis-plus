@@ -1,6 +1,6 @@
 {
   "name": "@luke8050/trellis-plus",
-  "version": "2.1.1",
+  "version": "2.1.2",
   "description": "为 trellis init 过的 OpenCode 项目加一层确定性门禁与 S/M/L 分级流程",
   "type": "module",
   "bin": {

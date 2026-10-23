@@ -3,6 +3,8 @@
 > 生成于 2026-10-12，基于上一会话的全部上下文与**实际读取/执行过**的文件。未读取、未执行、未验证的内容均已标注。
 > 旧版 HANDOFF（含 v1.1 时代的任务定义）已被本文件取代；v1.1 的历史文档在 `trellis-plus/docs/archive/`。
 
+> **【2026-10-23 更正】** 本文 §0、§2.7、§5 及 §1.4 的行数仍是旧会话状态（421 通过、无 Git、交付 zip、沙箱路径 `/home/claude/work/...`）。现状：项目是 GitHub 仓库 `luke8050/trellis-plus`，以 §8、「v2.2 变更」与文末「v2.3 会话进度」为准；回归当前 640 通过 / 0 失败 / 1 跳过。
+
 ## 0. 30 秒摘要
 
 - **做什么**：`trellis-plus` 是给已 `trellis init`（Trellis 0.6.17，OpenCode 平台）的项目加一层确定性门禁 + S/M/L 分级流程的 Node 脚本；目标项目是 **Java 8 + Maven 多模块 + JUnit5 + Mockito**（不用 JaCoCo）。本轮是 v1.1 → **v2 优化编码**。
@@ -339,3 +341,30 @@ OCR：`ocrGate`、`extractFindings`、`parseTriage`、`matchEntry`、`hasCodeEvi
 - **父子任务**：`parentOf` / `childrenOf` / `prdSource` / `readPrd`；子任务 prd.md 无“对齐状态”行时使用父任务 prd.md；`taskTier` 子任务继承父 tier；`familyCoverage` 跨子任务覆盖提示（仅告警）；父任务（有 children 且无 design/implement）的 lint-plan 只做提示；`seed <父> --prd-only`，`seed <子>` 写指针 prd.md 并把父 prd.md 追加进 implement.jsonl / check.jsonl；`matrix <父>` 汇总整个任务族。
 - **测试**：新增 P 组（父子任务），D / E 组新增编号、嵌套、分组、短路径用例；回归 628 通过 / 0 失败 / 1 跳过。
 - **未验证**：真实 OpenCode 里子 agent 是否按 jsonl 读取父 PRD。
+
+## v2.3 会话进度（2026-10-23）
+
+**来源**：`git clone` 公开仓库 `luke8050/trellis-plus`（`050c012`）；`add_repo` 因账号未关联 GitHub 失败；旧会话文件均不存在。本轮未 push，交付 zip。
+
+### 接手时发现的差异
+- 版本号三处不一致：`package.json` 2.1.1；`trellis-plus.mjs` 的 `TOOL_VERSION` 2.1.0；`assets/plus/plus.config.json` 硬编码 `"version": "2.1.0"`；根 README 写「当前版本 2.1.0」。用户确认以 `package.json` 现值 **2.1.1** 为准（未改 `package.json`）。
+- README 的测试命令 `BASE=../trellis-opencode` 实际会失败（脚本中途 `cd`，相对路径失效：145 通过 / 484 失败）；改绝对路径后基线 628 / 0 / 1，与 v2.2 记录一致。
+
+### 本轮任务
+| 任务 | 状态 | 改动 / 证据 |
+|---|---|---|
+| 需求 1 版本号取自 package.json | 完成 | `trellis-plus.mjs`：删 `const TOOL_VERSION = "2.1.0"`，新增 `loadToolVersion()`（读 `HERE/package.json`，要求 semver 字符串），在 `preflight()` 开头调用；缺失 / 非法 / 非 semver → 报错、退出码 2、不写任何文件（`--dry-run` 同）；`-h` 不依赖版本。`stampVersion` 在文件首行缺 `version` 时插入不留空行。`assets/plus/plus.config.json` 删除硬编码 `version`（`package.json` 是唯一来源）。`revert` 不需要版本，未改 |
+| 回归（A 组） | 完成 | `run-regression.sh`：`BASE` 先转绝对路径；写死的 `2.1.0` 全改为读被测工具的 `package.json`（`tv`/`TV`）。新增：把工具副本的 `package.json` 改成 9.9.9，新装后配置必须是 9.9.9 且 doctor 通过（`ver_follows`）；资产配置无 `version`；`package.json` 缺失 / 非法 JSON / 无 version / 非 semver 时 apply 退出 2、有文案、项目目录零变化；doctor 缺失同；`--dry-run` 同；`-h` 仍可用。反向对照（`reverse_file`）3 条新增：版本取自 package.json、package.json 错误会拦住 apply、非 semver 被拒；原有 `stampVersion` 对照保留 |
+| 需求 2 README 开源化 | 完成 | 根 `README.md`（中文，徽章 / 目录 / 特性 / 快速开始含 `npx @luke8050/trellis-plus` / 工作流 / 配置 / 贡献 / 许可证）；新增 `README.en.md`（英文，互相链接，docs 仍为中文并已注明）；新增 `LICENSE`（MIT，版权人 luke8050，2026）；README 不再手写版本号与回归条数；`trellis-plus/README.md`、`test-harness/README.md` 同步 |
+
+### 验证结果
+- `node --check trellis-plus.mjs`、`bash -n run-regression.sh` 通过；`gate.mjs` 未改，故无需更新其变异串。
+- 全量回归（假 ocr / 假 mvn / 夹具）：**640 通过 / 0 失败 / 1 跳过**，165 条反向对照；跳过项仍是 v1.1→v2 升级用例（缺 `V11_TOOL`）。日志在沙箱 `/home/claude/regress-final.log`（不在交付物内）。
+- 源码 sha256 前 16 位：gate.mjs 8795937de5111828（未改）、trellis-plus.mjs dbf80d8993bcbfa6、run-regression.sh 60f583bf3611b5eb。
+- **未验证**：`@luke8050/trellis-plus` 在 npm 上的真实发布状态与 `npx` 实际运行（沙箱访问不到 npm registry，发布与否来自用户口头确认）、README 徽章渲染、真实 ocr / Maven / CodeGraph / OpenCode 行为（同前）。README 中原先猜测的 Trellis、open-code-review 外链因无法核实已去掉。
+
+### 注意 / 待办
+- 新装项目将写入 `version` 2.1.1，旧项目 `doctor` 会提示版本落后（重新 `apply` 即可）。docs 里仍有「v2.1」等历史表述，属各版本变更记录，未改。
+- 版本号是否应升为 2.2.0（v2.2 内容已发布但 `package.json` 仍 2.1.1）：**待用户决定**。
+- 若经 GitHub 网页上传文件，`test-harness/fake-*/` 与 `mkjava.sh` 的可执行位可能丢失（需 git 提交模式 100755）。
+

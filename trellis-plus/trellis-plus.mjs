@@ -32,8 +32,18 @@ import { createHash } from "node:crypto"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 
-const TOOL_VERSION = "2.1.0"
 const HERE = dirname(fileURLToPath(import.meta.url))
+const SEMVER_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/
+/** The tool version is NOT hard-coded: package.json (next to this file, always shipped by npm) is the single source. Set by loadToolVersion() in preflight(). */
+let TOOL_VERSION = null
+function loadToolVersion() {
+  const file = join(HERE, "package.json")
+  let doc
+  try { doc = JSON.parse(readFileSync(file, "utf8")) } catch (e) { log.err(`cannot read the tool version from ${file}: ${e.code === "ENOENT" ? "file not found" : e.message}`); return false }
+  if (typeof doc?.version !== "string" || !SEMVER_RE.test(doc.version)) { log.err(`${file}: "version" must be a semver string like 2.1.1 (got ${JSON.stringify(doc?.version)})`); return false }
+  TOOL_VERSION = doc.version
+  return true
+}
 const ASSETS = join(HERE, "assets")
 
 // ───────────── args ─────────────
@@ -421,6 +431,7 @@ function hookState() {
 // ───────────── commands ─────────────
 
 function preflight() {
+  if (!loadToolVersion()) return false
   let ok = true
   if (!existsSync(ROOT) || !statSync(ROOT).isDirectory()) { log.err(`project path does not exist or is not a directory: ${ROOT}`); return false }
   if (Number(process.versions.node.split(".")[0]) < 18) { log.err(`Node ${process.versions.node} < 18`); ok = false }
@@ -443,7 +454,7 @@ function stampVersion() {
   let doc
   try { doc = JSON.parse(cur) } catch { log.warn(`${rel} is not valid JSON — version not stamped`); return }
   if (doc && doc.version === TOOL_VERSION) return
-  let next = typeof doc?.version === "string" ? cur.replace(/("version"\s*:\s*)"[^"]*"/, (_, p) => `${p}"${TOOL_VERSION}"`) : cur.replace(/^\{/, `{\n  "version": "${TOOL_VERSION}",`)
+  let next = typeof doc?.version === "string" ? cur.replace(/("version"\s*:\s*)"[^"]*"/, (_, p) => `${p}"${TOOL_VERSION}"`) : /^\{[ \t]*\r?\n/.test(cur) ? cur.replace(/^\{[ \t]*\r?\n/, `{\n  "version": "${TOOL_VERSION}",\n`) : cur.replace(/^\{/, `{\n  "version": "${TOOL_VERSION}",`)
   try { if (JSON.parse(next).version !== TOOL_VERSION) throw new Error("x") } catch { next = JSON.stringify({ version: TOOL_VERSION, ...doc }, null, 2) + "\n" }
   writeIf(rel, next)
   log.ok(`${rel}: version ${TOOL_VERSION}${doc?.version ? ` (was ${doc.version})` : ""}`)

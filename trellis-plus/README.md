@@ -1,4 +1,6 @@
-# trellis-plus v2.1
+# trellis-plus
+
+> 版本号以本目录 `package.json` 的 `version` 为准；`apply` 把它写入项目 `.trellis/plus/plus.config.json` 的 `version`。
 
 给已经 `trellis init` 的项目（OpenCode 平台，Trellis 0.6.17）加一层**确定性门禁 + 分级流程**的 Node 脚本。零依赖，Node >= 18，Java 8 + Maven 多模块 + JUnit5 + Mockito 项目为目标环境。
 
@@ -93,7 +95,7 @@ Phase 3  gate pre-commit → 提交（git hook 再查一遍已暂存文件）
 
 ## v2.1 变更
 
-- 版本号写入 `plus.config.json`（`version`）；`doctor` 核对。
+- 版本号写入 `plus.config.json`（`version`）；`doctor` 核对。取值来自 `package.json`，不再在代码里硬编码；`package.json` 缺失或 `version` 非法时 `apply` / `doctor` 退出码 2 且不写任何文件。
 - 安装不再检查 `/grill-me`；流程里只“建议”使用，没装可跳过，决策记录可写 `无：原因`。
 - design.md「整体方案」只写本次方案（摘要 + 图），不再要求方案比较表；对应告警已删除。
 - 设计评审与 OCR：先列问题与修改方案，用户确认后才改（只改流程文案，不加门禁）。

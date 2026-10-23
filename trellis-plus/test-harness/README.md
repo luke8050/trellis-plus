@@ -31,6 +31,7 @@ BASE=/path/to/a/trellis-initialized/project  bash test-harness/run-regression.sh
 
 ## 注意（v2.1）
 
+- `BASE` 可以是相对路径（脚本会先转成绝对路径）。
 - 直接用 `BASE=<GitHub 上的 trellis-opencode>` 运行时，BASE 里没有被 gitignore 的 `.trellis/.developer`；脚本默认导出 `TRELLIS_DEVELOPER=regression`，也可自行设置。
 - `fake-ocr/ocr`、`fake-mvn/mvn`、`mkjava.sh` 需要可执行位（经 GitHub 网页上传会丢失，需 `chmod +x` 或用 git 提交模式变更）。
 - `reverse_file` 可对安装器或 assets 做同样的“临时破坏后断言必须失败”对照。

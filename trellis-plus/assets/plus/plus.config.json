@@ -14,8 +14,7 @@
     "designM": 12288,
     "designL": 30720,
     "implement": 20480,
-    "codeMap": 20480,
-    "total": 61440
+    "total": 73728
   },
   "planning": {
     "anchorSymbolWindow": 15,

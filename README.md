@@ -69,7 +69,7 @@ TRELLIS_DEVELOPER=<任意名字> BASE=../trellis-opencode bash test-harness/run-
 
 - 必须用 bash；退出码 = 失败断言数。`TRELLIS_DEVELOPER` 不设时脚本默认用 `regression`（BASE 里没有被 gitignore 的 `.trellis/.developer`）。
 - 全程使用假 ocr / 假 mvn / 夹具，不联网；每条门禁规则都有正例、反例和“临时破坏逻辑后断言必须失败”的反向对照。
-- 最近一次结果（2.1.0）：**594 通过 / 0 失败 / 1 跳过**（跳过的是 v1.1 → v2 升级用例，需要 `V11_TOOL`）。
+- 最近一次结果（v2.2）：**628 通过 / 0 失败 / 1 跳过**（跳过的是 v1.1 → v2 升级用例，需要 `V11_TOOL`）。
 
 ## 尚未验证
 

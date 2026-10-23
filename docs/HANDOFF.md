@@ -194,7 +194,7 @@ OCR：`ocrGate`、`extractFindings`、`parseTriage`、`matchEntry`、`hasCodeEvi
 
 ### 3.4 文档格式契约（gate 靠它们解析，改格式=改 gate+模板+样例+回归）
 - **prd.md**：`对齐状态：已对齐|未对齐`（独占一行，HTML 注释内不算）；`## …需求…` 表/列表，每项以 `R<n>` 开头且唯一；`## …决策记录…` 表（首列 `D<n>`，列含 结论/来源/影响）；`## …待确认问题…` 为空或"无/None"。
-- **design.md**（L 全部、M 可省 2、9；v2.1 起新增 6 数据库变更并顺延，见 §2.9）：`## 0 评审导读`、`1 背景与目标…`、`2 术语…`、`3 整体方案`（表 ≥2 行告警）、`4 模块拆分`（列 模块/职责/对应R/依赖）、`5 详细设计`、`6 异常与边界`（列含"对应测试"）、`7 影响分析`（列 符号/引用数/处置；引用数写 `命令 → 命中数`，≥ `highRiskRefs`(5) 须含"高风险"）、`8 非功能`、`9 依赖…`、`10 覆盖矩阵…`、`11 开放问题`。
+- **design.md**（L 全部、M 可省 2、9；v2.1 起新增 6 数据库变更并顺延，见 §2.9；**v2.2 起已删除模块拆分并重排为 0–11，以文末“v2.2 变更”为准**）：`## 0 评审导读`、`1 背景与目标…`、`2 术语…`、`3 整体方案`（表 ≥2 行告警）、`4 模块拆分`（列 模块/职责/对应R/依赖）、`5 详细设计`、`6 异常与边界`（列含"对应测试"）、`7 影响分析`（列 符号/引用数/处置；引用数写 `命令 → 命中数`，≥ `highRiskRefs`(5) 须含"高风险"）、`8 非功能`、`9 依赖…`、`10 覆盖矩阵…`、`11 开放问题`。
 - **implement.md**：`## 1 实施步骤`（`### 步骤 n：…`，路径用反引号；新增文件在步骤里写"新增"）、`## 2 测试矩阵`（列 对应R/类/用例/类型，类型只用 正常/边界/异常）、`## 3 测试豁免`（`- path.java: 原因(≥8 字)`，无则写"无"）。
 - **code-map.md**：锚点 `文件:行#符号`；找不到写 `NOT-FOUND: … — 搜索：\`命令\``。
 - **占位符**：`TBD|TODO|XXX|待补充|待定|<填写…>|【填写…】|{{…}}`；模板说明文字不得含这些词（HTML 注释会被剥离，但仍避免）。
@@ -329,4 +329,13 @@ OCR：`ocrGate`、`extractFindings`、`parseTriage`、`matchEntry`、`hasCodeEvi
 
 1. 内网跑一个真实 L 级任务（N3），用 `gate usage` 按阶段记 token，核对需求 6 的效果与“覆盖 brainstorm”是否生效。
 2. 若效果不足，再评估第 3 档（implement.md 并入 design）、L 级评审改可选、`review.maxRounds` 降到 1、合并 2.2 check 与 2.4。
-3. `docs/orc命令输出.txt` 含内网主机名与项目路径，仓库公开前请脱敏。
+
+## v2.2 变更（2026-10-22，以此为准）
+
+- **编号**：`R_RE = /\bR\d+(?:\.\d+)*\b/g`、`R_HEAD_RE`；`leafIds`（有 R1.x 时 R1 是分组，不要求单独覆盖）、`knownId`、`expandIds`（引用 R1 覆盖 R1.x）。`sectionItems` 忽略缩进且不带编号的列表行。
+- **路径**：`fileIndex()`（`git ls-files --cached --others --exclude-standard`，进程内缓存）+ `resolveFile()`；`verifyAnchors` 对候选文件逐个校验行号范围与符号，多候选只告警；implement.md 路径检查同样走 `resolveFile`，正则新增裸 `*.java` 文件名。
+- **体积**：`limits.codeMap` 删除；其余限制全部 `rep.warn`；`status` 不再显示 code-map。
+- **design 章节**：删除 `4 模块拆分`，`DESIGN_ALWAYS` / `DESIGN_L_ONLY` 重排为 0–11（M 可省 2、8）；R 的覆盖只看 `覆盖矩阵`；`gate matrix` 的模块取自 `详细设计` 的 `### 5.n`。
+- **父子任务**：`parentOf` / `childrenOf` / `prdSource` / `readPrd`；子任务 prd.md 无“对齐状态”行时使用父任务 prd.md；`taskTier` 子任务继承父 tier；`familyCoverage` 跨子任务覆盖提示（仅告警）；父任务（有 children 且无 design/implement）的 lint-plan 只做提示；`seed <父> --prd-only`，`seed <子>` 写指针 prd.md 并把父 prd.md 追加进 implement.jsonl / check.jsonl；`matrix <父>` 汇总整个任务族。
+- **测试**：新增 P 组（父子任务），D / E 组新增编号、嵌套、分组、短路径用例；回归 628 通过 / 0 失败 / 1 跳过。
+- **未验证**：真实 OpenCode 里子 agent 是否按 jsonl 读取父 PRD。

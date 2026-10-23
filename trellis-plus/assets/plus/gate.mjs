@@ -7,12 +7,13 @@
  * Usage: node .trellis/plus/gate.mjs <command> [task-dir] [options]
  *
  *   tier <task> [S|M|L] [--reason "<why>"]   show / set the task tier (stored in task.json meta.plus_tier); S/M need a reason
- *   seed <task>            create the templates for the tier (prd.md; M/L: design.md, implement.md; L: research/code-map.md)
+ *   seed <task> [--prd-only]   create the templates for the tier (prd.md; M/L: design.md, implement.md; L: research/code-map.md).
+ *                          Full-stack: seed the PARENT with --prd-only (shared prd.md), then seed each child task (own design.md + implement.md, shared PRD)
  *   align <task>           prd.md: "对齐状态：已对齐", no open questions, decision log (M/L), every requirement numbered R<n>
  *   anchors <task>         verify every `path:line#Symbol` anchor in design / implement / research/code-map.md
- *   lint-plan <task>       size limits, placeholders, anchors, sections, R coverage, impact table, test matrix
+ *   lint-plan <task>       size hints, placeholders, anchors, sections, R coverage, impact table, test matrix
  *   design-review <task>   L tier: reviews/design-review.md header + every blocker answered in design-review-resolution.md
- *   matrix <task>          print the R -> module -> test coverage matrix (paste into design.md section 11)
+ *   matrix <task>          print the R -> module -> test coverage matrix (paste into design.md section 10; on a parent task: the whole family)
  *   status <task>          tier, file sizes, gate results and the next step (0 tokens)
  *   usage <task> [--phase <name> --tokens <n> [--note <text>]]   record / sum the tokens spent per phase
  *   pre-start <task>       tier-aware gate behind `task.py start`
@@ -42,10 +43,10 @@ const DEFAULT_CONFIG = {
     budget: { S: 60000, M: 150000, L: 320000 }, // token targets (upper bounds, not measured); OCR is not counted
     maxClassesM: 3, // tier M: at most this many changed Service/Controller classes, one Maven module
   },
-  limits: { prd: 10240, designM: 12288, designL: 30720, implement: 20480, codeMap: 20480, total: 61440 }, // bytes; total = prd+design+implement (sub-agents get all three injected)
+  limits: { prd: 10240, designM: 12288, designL: 30720, implement: 20480, total: 61440 }, // bytes, WARNING only (never blocks); total = prd+design+implement (sub-agents get all three injected). research/code-map.md has no limit: it is not injected
   planning: {
     anchorSymbolWindow: 15,
-    highRiskRefs: 5, // a symbol with >= this many references must be marked 高风险 in design.md section 8
+    highRiskRefs: 5, // a symbol with >= this many references must be marked 高风险 in design.md section 7
   },
   review: { maxRounds: 2 },
   profile: "standard", // preset of the gate switches: "standard" (v2 default) | "strict" | "light"; `gates.<name>` overrides single gates
@@ -112,7 +113,7 @@ function loadConfig() {
 
 const GATES = {
   align: "prd.md: 对齐状态：已对齐, 待确认问题 empty, 决策记录 (M/L), every requirement numbered R<n>, placeholders, size",
-  lintPlan: "M/L design.md + implement.md: placeholders, real anchors, sections, R coverage, impact table, test matrix, size, tier M limits",
+  lintPlan: "M/L design.md + implement.md: placeholders, real anchors, sections, R coverage, impact table, test matrix, tier M limits (size is a warning)",
   designReview: "L: reviews/design-review.md header + every blocker answered in design-review-resolution.md",
   manifests: "task.py start: implement.jsonl / check.jsonl carry real spec entries besides the [plus] guides (step 1.3)",
   test: "every changed Service/Controller has a changed JUnit5 unit test (same Maven module); tier S/M limits",
@@ -286,6 +287,28 @@ function git(args) {
   return { ok: r.status === 0, out: (r.stdout || "").trim(), err: (r.stderr || "").trim() }
 }
 
+/** Tracked + untracked (not ignored) files of the repo, cached: used to resolve short / partial paths. */
+let FILE_INDEX = null
+function fileIndex() {
+  if (FILE_INDEX) return FILE_INDEX
+  const r = git(["ls-files", "--cached", "--others", "--exclude-standard"])
+  FILE_INDEX = r.ok ? r.out.split("\n").filter(Boolean) : []
+  return FILE_INDEX
+}
+
+/**
+ * Resolve a path as written in a document to files of the repo. The full path from the repo root is not required:
+ * `OrderService.java` or `service/OrderService.java` find `src/main/java/.../service/OrderService.java` by suffix.
+ * Returns the repo-relative candidates (exactly one = unambiguous, none = the file does not exist).
+ */
+function resolveFile(file) {
+  const f = String(file).replace(/\\/g, "/").replace(/^\.\//, "")
+  const abs = resolve(ROOT, f)
+  if (abs.startsWith(ROOT) && existsSync(abs) && statSync(abs).isFile()) return [relative(ROOT, abs).replace(/\\/g, "/")]
+  if (f.startsWith("/") || f.split("/").includes("..")) return []
+  return fileIndex().filter((x) => x === f || x.endsWith("/" + f))
+}
+
 function globToRegex(glob) {
   let re = ""
   for (let i = 0; i < glob.length; i++) {
@@ -336,7 +359,14 @@ const col = (row, keys) => { const k = Object.keys(row).find((h) => keys.some((x
 /** Remove HTML comments but keep line numbers stable. */
 const stripComments = (t) => t.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, ""))
 const refs = (t, re) => [...new Set([...(t ?? "").matchAll(re)].map((m) => m[0]))]
-const R_RE = /\bR\d+\b/g
+const R_RE = /\bR\d+(?:\.\d+)*\b/g // R1, R1.1, R2.3.1: the whole dotted id is one requirement id
+const R_HEAD_RE = /^R\d+(?:\.\d+)*\b/
+/** Leaf ids: R1 is only a group when R1.1 exists; groups need no coverage of their own. */
+const leafIds = (ids) => ids.filter((q) => !ids.some((o) => o.startsWith(q + ".")))
+/** A cited id is known when it is defined, or when it is a group whose children are defined. */
+const knownId = (r, ids) => ids.includes(r) || ids.some((o) => o.startsWith(r + "."))
+/** Citing a group (R1) covers its children (R1.1, R1.2…). */
+const expandIds = (cited, ids) => { const out = new Set(); for (const c of cited) { out.add(c); for (const o of ids) if (o.startsWith(c + ".")) out.add(o) } return out }
 
 // A template slot looks like 【填写：…】, so unfilled templates fail; instruction text in templates must not use these words.
 const PLACEHOLDER_RE = /(\bTBD\b|\bTODO\b|\bXXX\b|待补充|待定|<填写[^>]*>|【填写[^】]*】|\{\{[^}]*\}\})/
@@ -384,6 +414,38 @@ function readTaskJson(taskDir) {
   try { return { path: p, raw: readFileSync(p, "utf8"), data: JSON.parse(readFileSync(p, "utf8")) } } catch { return null }
 }
 
+// ── parent / child tasks (full-stack work: ONE shared prd.md on the parent, one design.md + implement.md per child) ──
+
+const TASKS_ROOT = () => join(ROOT, ".trellis", "tasks")
+const taskDirByName = (name) => {
+  const d = join(TASKS_ROOT(), basename(String(name).trim()))
+  return existsSync(join(d, "task.json")) ? d : null
+}
+/** The parent task directory (task.json `parent`), or null. */
+function parentOf(taskDir) {
+  const p = readTaskJson(taskDir)?.data?.parent
+  return typeof p === "string" && p.trim() ? taskDirByName(p) : null
+}
+/** Child task directories (task.json `children`) that exist on disk. */
+function childrenOf(taskDir) {
+  const c = readTaskJson(taskDir)?.data?.children
+  return Array.isArray(c) ? c.map((n) => (typeof n === "string" ? taskDirByName(n) : null)).filter(Boolean) : []
+}
+/**
+ * Where the PRD of a task lives. A child task whose own prd.md has no plus structure (no 对齐状态 line: absent, or the
+ * stub / Trellis skeleton) uses the parent's prd.md; a child that carries a complete prd.md of its own keeps it.
+ */
+function prdSource(taskDir) {
+  const own = join(taskDir, "prd.md")
+  const par = parentOf(taskDir)
+  if (par && !/^对齐状态[:：]/m.test(stripComments(read(own) ?? ""))) {
+    const pp = join(par, "prd.md")
+    if (existsSync(pp)) return { path: pp, inherited: true, owner: par }
+  }
+  return { path: own, inherited: false, owner: taskDir }
+}
+const readPrd = (taskDir) => read(prdSource(taskDir).path)
+
 /**
  * Tier resolution. Stored in task.json `meta.plus_tier` (same place `task.py set-meta` writes).
  * A v1.x `.plus-lightweight` marker counts as S. No tier: `legacy` = the task carries v1.x artifacts (alignment.md,
@@ -395,6 +457,11 @@ function taskTier(taskDir) {
   const m = tj?.data?.meta
   const t = typeof m?.plus_tier === "string" ? m.plus_tier.trim().toUpperCase() : ""
   if (TIERS.includes(t)) return { tier: t, reason: String(m.plus_tier_reason ?? ""), legacy: false, unset: false }
+  // a child task without a tier of its own takes the parent's (the human decision was made once, for the whole requirement)
+  const par = parentOf(taskDir)
+  const pm = par ? readTaskJson(par)?.data?.meta : null
+  const pt = typeof pm?.plus_tier === "string" ? pm.plus_tier.trim().toUpperCase() : ""
+  if (TIERS.includes(pt)) return { tier: pt, reason: `inherited from parent ${basename(par)}${pm.plus_tier_reason ? `: ${pm.plus_tier_reason}` : ""}`, legacy: false, unset: false, inherited: true }
   if (existsSync(join(taskDir, ".plus-lightweight"))) return { tier: "S", reason: (read(join(taskDir, ".plus-lightweight")) ?? "").trim(), legacy: true, unset: false }
   const rdir = join(taskDir, "reviews")
   const oldReview = existsSync(rdir) && readdirSync(rdir).some((f) => /^design-r\d+-(accuracy|coverage|impact)\.md$/.test(f))
@@ -478,15 +545,24 @@ function verifyAnchors(text, name, rep, pl, seen = new Set()) {
     if (seen.has(key)) continue
     seen.add(key)
     n++
-    const abs = resolve(ROOT, file)
-    if (!abs.startsWith(ROOT) || !existsSync(abs)) { rep.error(`${name}: anchor ${file}:${l1}#${sym} — file does not exist`); continue }
-    const lines = (read(abs) ?? "").split("\n")
-    const a = Number(l1), b = Number(l2 ?? l1)
-    if (a < 1 || b > lines.length || a > b) { rep.error(`${name}: anchor ${file}:${l1}${l2 ? "-" + l2 : ""}#${sym} — line out of range (file has ${lines.length} lines)`); continue }
-    const w = pl.anchorSymbolWindow
-    const slice = lines.slice(Math.max(0, a - 1 - w), Math.min(lines.length, b + w)).join("\n")
-    const bare = sym.split(/[.<]/).filter(Boolean).pop()
-    if (!slice.includes(bare)) rep.error(`${name}: anchor ${file}:${l1}${l2 ? "-" + l2 : ""}#${sym} — symbol "${bare}" not found within ±${w} lines`)
+    const cands = resolveFile(file)
+    if (cands.length === 0) { rep.error(`${name}: anchor ${file}:${l1}#${sym} — file does not exist`); continue }
+    const label = `${file}:${l1}${l2 ? "-" + l2 : ""}#${sym}`
+    const problems = []
+    let okAny = false
+    for (const c of cands) {
+      const lines = (read(resolve(ROOT, c)) ?? "").split("\n")
+      const a = Number(l1), b = Number(l2 ?? l1)
+      if (a < 1 || b > lines.length || a > b) { problems.push(`${c}: line out of range (file has ${lines.length} lines)`); continue }
+      const w = pl.anchorSymbolWindow
+      const slice = lines.slice(Math.max(0, a - 1 - w), Math.min(lines.length, b + w)).join("\n")
+      const bare = sym.split(/[.<]/).filter(Boolean).pop()
+      if (!slice.includes(bare)) { problems.push(`${c}: symbol "${bare}" not found within ±${w} lines`); continue }
+      okAny = true
+      break
+    }
+    if (!okAny) rep.error(`${name}: anchor ${label} — ${cands.length === 1 ? problems[0].replace(/^[^:]+: /, "") : `no candidate matches (${problems.slice(0, 3).join("; ")})`}`)
+    else if (cands.length > 1) rep.warn(`${name}: anchor ${file} matches ${cands.length} files (${cands.slice(0, 3).join(", ")}${cands.length > 3 ? ", …" : ""}) — write a longer path to make it exact`)
   }
   return n
 }
@@ -520,8 +596,11 @@ function sectionItems(body) {
   const items = []
   for (const t of tablesOf(body)) for (const row of t) items.push({ head: String(Object.values(row)[0] ?? ""), text: Object.values(row).join(" | ") }) // every table counts: requirements may be grouped under ### headings, one table each
   for (const line of body.split("\n")) {
-    const m = line.match(/^\s*(?:[-*]|\d+[.)])\s+(.*)$/)
-    if (m) items.push({ head: m[1], text: m[1] })
+    const m = line.match(/^(\s*)(?:[-*]|\d+[.)])\s+(.*)$/)
+    if (!m) continue
+    // a nested line (acceptance criteria, notes under a requirement) is not an item of its own unless it carries an id (- R1.1 …)
+    if (m[1].replace(/\t/g, "  ").length >= 2 && !R_HEAD_RE.test(m[2].replace(/[*_`]/g, "").trim())) continue
+    items.push({ head: m[2], text: m[2] })
   }
   return items
 }
@@ -533,12 +612,14 @@ function sectionItems(body) {
 function alignGate(taskDir, cfg, ti = taskTier(taskDir)) {
   const rep = new Report(`align  ${relative(ROOT, taskDir)}`)
   const soft = (m) => (ti.legacy ? rep.warn(`legacy task: ${m}`) : rep.error(m))
-  const raw = read(join(taskDir, "prd.md"))
+  const src = prdSource(taskDir)
+  const raw = read(src.path)
   if (raw === null) { rep.error("prd.md missing"); return rep }
   if (needTier(rep, ti)) return rep
+  if (src.inherited) rep.note(`prd.md is inherited from the parent task ${basename(src.owner)} (shared by all child tasks)`)
   const txt = stripComments(raw)
   placeholders("prd.md", txt, rep)
-  if (bytesOf(raw) > cfg.limits.prd) soft(`prd.md is ${bytesOf(raw)} bytes (> ${cfg.limits.prd}); split the task into parent/child tasks`)
+  if (bytesOf(raw) > cfg.limits.prd) rep.warn(`prd.md is ${bytesOf(raw)} bytes (> ${cfg.limits.prd}); consider splitting the task (every sub-agent dispatch injects it)`)
 
   const status = (txt.match(/^对齐状态[:：]\s*(已对齐|未对齐)\s*$/m) || [])[1]
   if (!status) soft('prd.md: missing the line "对齐状态：已对齐" (or "对齐状态：未对齐")')
@@ -558,7 +639,7 @@ function alignGate(taskDir, cfg, ti = taskTier(taskDir)) {
   if (!reqSec) soft('prd.md: missing section "需求" (a table or list; every requirement numbered R1, R2…)')
   else {
     for (const it of sectionItems(reqSec.body)) {
-      const m = it.head.replace(/[*_`]/g, "").trim().match(/^R\d+\b/)
+      const m = it.head.replace(/[*_`]/g, "").trim().match(R_HEAD_RE)
       if (!m) { soft(`prd.md 需求: item without a number R<n>: ${it.text.slice(0, 60)}`); continue }
       if (reqIds.includes(m[0])) soft(`prd.md 需求: duplicate ${m[0]}`)
       reqIds.push(m[0])
@@ -568,7 +649,7 @@ function alignGate(taskDir, cfg, ti = taskTier(taskDir)) {
     const groups = reqSec.body.split(/^###[ \t]+/m).slice(1).map((b) => ({ title: b.split("\n")[0].trim(), items: sectionItems(b.split("\n").slice(1).join("\n")) }))
     nGroups = groups.length
     if (reqIds.length && groups.length === 0) rep.warn('prd.md 需求: not grouped by function — put each function / requirement module under its own "### <name>" heading, with its requirements below it')
-    for (const g of groups) if (!g.items.some((i) => /^R\d+\b/.test(i.head.replace(/[*_`]/g, "").trim()))) rep.warn(`prd.md 需求: group "${g.title}" has no requirement R<n>`)
+    for (const g of groups) if (!g.items.some((i) => R_HEAD_RE.test(i.head.replace(/[*_`]/g, "").trim()))) rep.warn(`prd.md 需求: group "${g.title}" has no requirement R<n>`)
   }
 
   const decSec = findSection(secs, "决策记录")
@@ -584,7 +665,7 @@ function alignGate(taskDir, cfg, ti = taskTier(taskDir)) {
   for (const d of decs) {
     const id = Object.values(d)[0]
     if (!col(d, ["结论"]).trim() || !col(d, ["来源"]).trim()) rep.warn(`prd.md ${id}: needs both 结论 and 来源 (user + date, or file:line)`)
-    for (const r of refs(col(d, ["影响"]), R_RE)) if (reqIds.length && !reqIds.includes(r)) rep.warn(`prd.md ${id}: 影响 cites ${r}, which prd.md does not define`)
+    for (const r of refs(col(d, ["影响"]), R_RE)) if (reqIds.length && !knownId(r, reqIds)) rep.warn(`prd.md ${id}: 影响 cites ${r}, which prd.md does not define`)
   }
   rep.note(`tier ${ti.tier ?? "?"}${ti.legacy ? " (legacy)" : ""}: ${reqIds.length} requirement(s), ${decs.length} decision(s), status ${status ?? "?"}, ${nGroups} function group(s)`)
   return rep
@@ -607,8 +688,8 @@ function hitCount(cell) {
   return m ? Number(m[1] ?? m[2]) : null
 }
 
-const DESIGN_ALWAYS = [["评审导读", "0 评审导读"], ["背景与目标", "1 背景与目标、非目标"], ["整体方案", "3 整体方案"], ["模块拆分", "4 模块拆分"], ["数据库变更", "5 数据库变更"], ["详细设计", "6 详细设计"], ["异常与边界", "7 异常与边界"], ["影响分析", "8 影响分析"], ["依赖", "10 依赖、风险、兼容与回滚"], ["覆盖矩阵", "11 覆盖矩阵与上线检查"], ["开放问题", "12 开放问题"]]
-const DESIGN_L_ONLY = [["术语", "2 术语与约定"], ["非功能", "9 非功能"]]
+const DESIGN_ALWAYS = [["评审导读", "0 评审导读"], ["背景与目标", "1 背景与目标、非目标"], ["整体方案", "3 整体方案"], ["数据库变更", "4 数据库变更"], ["详细设计", "5 详细设计"], ["异常与边界", "6 异常与边界"], ["影响分析", "7 影响分析"], ["依赖", "9 依赖、风险、兼容与回滚"], ["覆盖矩阵", "10 覆盖矩阵与上线检查"], ["开放问题", "11 开放问题"]]
+const DESIGN_L_ONLY = [["术语", "2 术语与约定"], ["非功能", "8 非功能"]]
 const IMPL_REQUIRED = [["实施步骤", "1 实施步骤"], ["测试矩阵", "2 测试矩阵"], ["测试豁免", "3 测试豁免"]]
 const TYPE_RE = { 正常: /正常|normal/i, 边界: /边界|boundary/i, 异常: /异常|错误|error|exception/i }
 
@@ -620,25 +701,33 @@ function lintPlan(taskDir, cfg, ti = taskTier(taskDir)) {
   const rep = new Report(`lint-plan  ${relative(ROOT, taskDir)}`)
   const soft = (m) => (ti.legacy ? rep.warn(`legacy task: ${m}`) : rep.error(m))
   const L = cfg.limits
-  const prdRaw = read(join(taskDir, "prd.md"))
+  const prdRaw = readPrd(taskDir)
+  const isChild = prdSource(taskDir).inherited
   if (!prdRaw) { rep.error("prd.md missing"); return rep }
   if (needTier(rep, ti)) return rep
   if (ti.tier === "S") { rep.note(`tier S${ti.reason ? ` (${ti.reason})` : ""}: only prd.md is required; design/implement are not checked`); return rep }
 
   const designRaw = read(join(taskDir, "design.md"))
   const implRaw = read(join(taskDir, "implement.md"))
+  const kids = childrenOf(taskDir)
+  if (kids.length && !designRaw && !implRaw) { // a parent task: the shared PRD lives here, design.md / implement.md live in the child tasks
+    const reqIds = refs(findSection(sectionsOf(stripComments(prdRaw)), "需求")?.body ?? "", R_RE)
+    rep.note(`parent task with ${kids.length} child task(s): design.md / implement.md are checked in the children (${kids.map((k) => basename(k)).join(", ")})`)
+    familyCoverage(kids, reqIds, rep, "warn")
+    return rep
+  }
   if (!designRaw) rep.error("design.md missing (run `gate seed <task>`, then draft it — skill plus-draft)")
   if (!implRaw) rep.error("implement.md missing (run `gate seed <task>`, then draft it — skill plus-draft)")
   if (!designRaw || !implRaw) return rep
   const mapRaw = read(join(taskDir, "research", "code-map.md"))
   const prd = stripComments(prdRaw), design = stripComments(designRaw), impl = stripComments(implRaw), cmap = stripComments(mapRaw ?? "")
 
-  // ── size limits (sub-agents get prd+design+implement injected on every dispatch) ──
+  // ── size hints (sub-agents get prd+design+implement injected on every dispatch): warnings only, research/code-map.md is not injected and has no limit ──
   const dLimit = ti.tier === "M" ? L.designM : L.designL
-  const sizes = [["prd.md", bytesOf(prdRaw), L.prd], ["design.md", bytesOf(designRaw), dLimit], ["implement.md", bytesOf(implRaw), L.implement], ["research/code-map.md", bytesOf(mapRaw), L.codeMap]]
-  for (const [n, b, max] of sizes) if (b > max) soft(`${n} is ${b} bytes (> ${max}). Split the task into parent/child tasks or tighten the document`)
+  const sizes = [["prd.md", bytesOf(prdRaw), L.prd], ["design.md", bytesOf(designRaw), dLimit], ["implement.md", bytesOf(implRaw), L.implement]]
+  for (const [n, b, max] of sizes) if (b > max) rep.warn(`${n} is ${b} bytes (> ${max}); consider splitting the task into parent/child tasks or tightening the document`)
   const total = bytesOf(prdRaw) + bytesOf(designRaw) + bytesOf(implRaw)
-  if (total > L.total) soft(`prd+design+implement is ${total} bytes (> ${L.total}); every implement/check dispatch injects all three`)
+  if (total > L.total) rep.warn(`prd+design+implement is ${total} bytes (> ${L.total}); every implement/check dispatch injects all three`)
 
   // ── truth: placeholders and anchors ──
   placeholders("design.md", design, rep)
@@ -661,21 +750,17 @@ function lintPlan(taskDir, cfg, ti = taskTier(taskDir)) {
     if (!s) { soft(`design.md missing section "## ${label}"`); continue }
     if (s.body.replace(/\s+/g, " ").trim().length === 0) soft(`design.md section "${s.heading}" is empty (write 无 / 省略：<原因>)`)
   }
-  const unknownR = (name, text) => { for (const r of refs(text, R_RE)) if (reqIds.length && !reqIds.includes(r)) rep.error(`${name} cites ${r}, which prd.md does not define`) }
-
-  const mod = findSection(dSecs, "模块拆分")
-  const modRows = mod ? parseTable(mod.body) : []
-  if (mod && modRows.length === 0) soft("design.md 模块拆分 has no table rows (模块 | 职责 | 对应R | 依赖)")
-  const covered = new Set()
-  for (const r of modRows) {
-    const rs = refs(col(r, ["对应r", "对应需求"]), R_RE)
-    if (!rs.length) rep.warn(`design.md 模块拆分: module "${col(r, ["模块"])}" cites no R (scope creep?)`)
-    rs.forEach((x) => covered.add(x))
-    unknownR("design.md 模块拆分", col(r, ["对应r", "对应需求"]))
-  }
-  if (mod && modRows.length) for (const q of reqIds) if (!covered.has(q)) rep.error(`${q} has no module in design.md 模块拆分 (a requirement without a module is an omission)`)
+  const unknownR = (name, text) => { for (const r of refs(text, R_RE)) if (reqIds.length && !knownId(r, reqIds)) rep.error(`${name} cites ${r}, which prd.md does not define`) }
   const cov = findSection(dSecs, "覆盖矩阵")
-  if (cov) for (const q of reqIds) if (!new RegExp(`\\b${q}\\b`).test(cov.body)) soft(`${q} is missing from design.md 覆盖矩阵`)
+  const covCited = cov ? expandIds(refs(cov.body, R_RE), reqIds) : new Set()
+  if (cov) {
+    unknownR("design.md 覆盖矩阵", cov.body)
+    if (isChild) { // child task: it covers its own share of the shared PRD, the family is checked together
+      if (!refs(cov.body, R_RE).length) soft("design.md 覆盖矩阵 cites no requirement R<n> (a child task lists the requirements of the shared prd.md it implements)")
+      const par = parentOf(taskDir)
+      if (par) familyCoverage(childrenOf(par), reqIds, rep, "warn")
+    } else for (const q of leafIds(reqIds)) if (!covCited.has(q)) soft(`${q} is missing from design.md 覆盖矩阵`)
+  }
   // 整体方案 holds only the chosen solution (summary + diagram): no alternatives table is required or checked
   const exc = findSection(dSecs, "异常与边界")
   if (exc) for (const r of parseTable(exc.body)) if (!col(r, ["对应测试", "测试"]).trim()) rep.warn(`design.md 异常与边界: scenario "${col(r, ["场景"])}" has no 对应测试`)
@@ -712,12 +797,15 @@ function lintPlan(taskDir, cfg, ti = taskTier(taskDir)) {
   const isSvcCtl = (f) => matchAny(tg.include, f) && !matchAny(tg.exclude, f)
   const needTest = new Map() // class -> file
   for (const b of blocks) {
-    for (const m of b.matchAll(/`((?:[\w.\-]+\/)+[\w.\-]+\.[A-Za-z]{1,10})`/g)) {
-      const f = m[1].replace(/^\.\//, "")
-      const abs = resolve(ROOT, f)
+    for (const m of b.matchAll(/`((?:[\w.\-]+\/)+[\w.\-]+\.[A-Za-z]{1,10}|[\w\-]+\.java)`/g)) {
+      const written = m[1].replace(/^\.\//, "")
+      const cands = resolveFile(written) // a short / partial path is fine: it is looked up in the repo
       const isNew = /新增|新建|\badd\b|\bnew\b|\bcreate\b/i.test(b)
-      if (!abs.startsWith(ROOT) || !existsSync(abs)) { if (!isNew) rep.error(`implement.md: \`${f}\` does not exist — fix the path, or write 新增 in the step if the file is new`); }
-      if (!isSvcCtl(f) || exempt.has(f)) continue
+      if (cands.length === 0 && !isNew) rep.error(`implement.md: \`${written}\` does not exist — fix the path, or write 新增 in the step if the file is new`)
+      if (cands.length > 1) rep.warn(`implement.md: \`${written}\` matches ${cands.length} files (${cands.slice(0, 3).join(", ")}) — write a longer path to make it exact`)
+      const f = cands[0] ?? written
+      const abs = resolve(ROOT, f)
+      if (!isSvcCtl(f) || exempt.has(f) || exempt.has(written)) continue
       if (existsSync(abs) && tg.skipInterfaces && isPureInterface(read(abs) ?? "")) continue
       needTest.set(basename(f, ".java"), f)
     }
@@ -740,30 +828,61 @@ function lintPlan(taskDir, cfg, ti = taskTier(taskDir)) {
     if (rows.length === 0) { rep.error(`implement.md 测试矩阵 has no cases for ${cls} (Service/Controller) — add normal/boundary/error rows or list it under 测试豁免`); continue }
     for (const [type, re] of Object.entries(TYPE_RE)) if (!rows.some((r) => re.test(col(r, ["类型", "type"])))) rep.error(`implement.md 测试矩阵: ${cls} has no ${type} case`)
   }
-  const tested = new Set(mrows.flatMap((r) => refs(col(r, ["对应r", "对应需求"]), R_RE)))
-  for (const q of reqIds) if (mrows.length && !tested.has(q)) rep.warn(`${q} has no row in implement.md 测试矩阵 (fine only if no code behaviour changes)`)
-  rep.note(`${reqIds.length} requirement(s); ${needTest.size} Service/Controller class(es) need tests; ${mrows.length} test-matrix row(s)`)
+  const tested = expandIds(mrows.flatMap((r) => refs(col(r, ["对应r", "对应需求"]), R_RE)), reqIds)
+  // a child task answers for the requirements its own 覆盖矩阵 lists; a single task for all leaf requirements
+  const mine = isChild ? leafIds(reqIds).filter((q) => covCited.has(q)) : leafIds(reqIds)
+  for (const q of mine) if (mrows.length && !tested.has(q)) rep.warn(`${q} has no row in implement.md 测试矩阵 (fine only if no code behaviour changes)`)
+  rep.note(`${reqIds.length} requirement(s)${isChild ? ` (shared PRD; ${mine.length} in this child)` : ""}; ${needTest.size} Service/Controller class(es) need tests; ${mrows.length} test-matrix row(s)`)
   return rep
 }
 
 // ───────────────────────── matrix ─────────────────────────
 
+/**
+ * Family coverage: every leaf requirement of the shared prd.md should appear in the 覆盖矩阵 of at least one child task.
+ * `level` "warn": siblings may not be drafted yet, so it never blocks.
+ */
+function familyCoverage(kids, reqIds, rep, level = "warn") {
+  const cited = new Set()
+  for (const k of kids) {
+    const d = stripComments(read(join(k, "design.md")) ?? "")
+    const cov = findSection(sectionsOf(d), "覆盖矩阵")
+    if (cov) for (const x of expandIds(refs(cov.body, R_RE), reqIds)) cited.add(x)
+  }
+  const missing = leafIds(reqIds).filter((q) => !cited.has(q))
+  if (missing.length) rep[level](`requirement(s) not yet in the 覆盖矩阵 of any child task (${kids.map((k) => basename(k)).join(", ")}): ${missing.join(", ")}`)
+  return missing
+}
+
+/** Module = a `### x.y <name>` block of design.md 详细设计; it covers the requirements it cites. */
+function designModules(design, reqIds) {
+  const det = findSection(sectionsOf(design), "详细设计")
+  const blocks = det ? det.body.split(/^###\s+/m).slice(1) : []
+  return blocks.map((b) => ({ name: b.split("\n")[0].replace(/^[\d.]+\s*/, "").trim(), rs: expandIds(refs(b, R_RE), reqIds) }))
+}
+
 function cmdMatrix(taskDir, opts) {
-  const prd = stripComments(read(join(taskDir, "prd.md")) ?? "")
-  const design = stripComments(read(join(taskDir, "design.md")) ?? "")
-  const impl = stripComments(read(join(taskDir, "implement.md")) ?? "")
+  const prd = stripComments(readPrd(taskDir) ?? "")
   const reqSec = findSection(sectionsOf(prd), "需求")
   const reqIds = refs(reqSec ? reqSec.body : prd, R_RE)
-  const mod = findSection(sectionsOf(design), "模块拆分")
-  const mat = findSection(sectionsOf(impl), "测试矩阵")
-  const modRows = mod ? parseTable(mod.body) : []
-  const testRows = mat ? parseTable(mat.body) : []
+  const kids = childrenOf(taskDir)
+  // a parent task prints the whole family: the shared requirements against the modules / tests of all child tasks
+  const parts = kids.length && !existsSync(join(taskDir, "design.md")) ? kids : [taskDir]
+  const modules = [], testRows = []
+  for (const d of parts) {
+    const design = stripComments(read(join(d, "design.md")) ?? "")
+    const impl = stripComments(read(join(d, "implement.md")) ?? "")
+    const tag = parts.length > 1 ? `${basename(d).replace(/^\d+-\d+-/, "")}/` : ""
+    for (const m of designModules(design, reqIds)) modules.push({ name: tag + m.name, rs: m.rs })
+    const mat = findSection(sectionsOf(impl), "测试矩阵")
+    for (const r of mat ? parseTable(mat.body) : []) testRows.push({ r, rs: expandIds(refs(col(r, ["对应r", "对应需求"]), R_RE), reqIds) })
+  }
   const gaps = []
   const lines = ["| 需求 | 模块 | 测试 |", "| --- | --- | --- |"]
-  for (const q of reqIds) {
-    const mods = modRows.filter((r) => refs(col(r, ["对应r", "对应需求"]), R_RE).includes(q)).map((r) => col(r, ["模块"]))
-    const tests = testRows.filter((r) => refs(col(r, ["对应r", "对应需求"]), R_RE).includes(q)).map((r) => `${col(r, ["类"])}#${col(r, ["用例"])}`)
-    if (!mods.length) gaps.push(`${q}: no module in design.md 模块拆分`)
+  for (const q of leafIds(reqIds)) {
+    const mods = modules.filter((m) => m.rs.has(q)).map((m) => m.name)
+    const tests = testRows.filter((t) => t.rs.has(q)).map((t) => `${col(t.r, ["类"])}#${col(t.r, ["用例"])}`)
+    if (!mods.length) gaps.push(`${q}: not cited in any module of design.md 详细设计 (### x.y <module>)`)
     if (!tests.length) gaps.push(`${q}: no row in implement.md 测试矩阵`)
     lines.push(`| ${q} | ${mods.join("、") || "（无）"} | ${tests.join("、") || "（无）"} |`)
   }
@@ -842,7 +961,7 @@ function designReview(taskDir, cfg, ti = taskTier(taskDir)) {
   // documents edited after the review are expected (that is the fix); say so, do not force a re-review
   const ref = existsSync(join(rdir, "design-review-resolution.md")) ? join(rdir, "design-review-resolution.md") : join(rdir, "design-review.md")
   const refTime = statSync(ref).mtimeMs
-  const later = ["prd.md", "design.md", "implement.md"].filter((f) => existsSync(join(taskDir, f)) && statSync(join(taskDir, f)).mtimeMs > refTime + 1000)
+  const later = [prdSource(taskDir).path, join(taskDir, "design.md"), join(taskDir, "implement.md")].filter((f) => existsSync(f) && statSync(f).mtimeMs > refTime + 1000).map((f) => basename(f))
   if (later.length) rep.warn(`${later.join(", ")} changed after the review was written — fine for blocker fixes; if the change is substantive run round ${(round ?? 1) + 1}`)
   return rep
 }
@@ -875,7 +994,7 @@ function preStart(taskDir, cfg) {
 
 const PRD_SKELETON_RE = /##\s+Requirements\s+-\s+TBD/
 
-function cmdSeed(taskDir, cfg) {
+function cmdSeed(taskDir, cfg, opts = {}) {
   const ti = taskTier(taskDir)
   const rep = new Report("seed")
   if (ti.unset) { rep.error("set the tier first (a human decides): node .trellis/plus/gate.mjs tier <task> S|M|L [--reason \"…\"]"); rep.print(); return 1 }
@@ -890,16 +1009,34 @@ function cmdSeed(taskDir, cfg) {
   // `task.py create` writes a prd.md skeleton ("Requirements - TBD"); an untouched one is replaced by the v2 structure.
   const prdPath = join(taskDir, "prd.md")
   const cur = read(prdPath)
-  if (cur !== null && PRD_SKELETON_RE.test(cur) && !/^对齐状态[:：]/m.test(cur) && cur.length < 800) {
+  const shared = prdSource(taskDir)
+  if (shared.inherited) {
+    // child task: requirements / decisions / alignment live in the parent's prd.md; this prd.md is only a pointer
+    if (cur === null || (PRD_SKELETON_RE.test(cur) && cur.length < 800)) {
+      writeFileSync(prdPath, `# 子任务：沿用父任务 PRD\n\n本任务不单独写 PRD。需求、决策记录和对齐状态以父任务的 prd.md 为准：\`${relative(ROOT, shared.path).replace(/\\/g, "/")}\`（实现与检查子 agent 通过 implement.jsonl / check.jsonl 读取它）。\n\n## 本子任务负责的需求\n\n- 在 design.md 的“覆盖矩阵”里列出本任务实现的 R 编号；其余编号由其他子任务负责。\n`)
+      rep.note("prd.md is a pointer to the parent's shared PRD")
+    } else rep.note("prd.md exists — kept")
+  } else if (cur !== null && PRD_SKELETON_RE.test(cur) && !/^对齐状态[:：]/m.test(cur) && cur.length < 800) {
     copyFileSync(join(tplDir, "prd.md"), prdPath)
     rep.note("replaced the untouched Trellis prd.md skeleton with the plus structure (需求 R<n>, 决策记录, 对齐状态)")
   } else {
     if (cur !== null && !/^对齐状态[:：]/m.test(cur)) rep.warn("prd.md exists without the plus structure — add 对齐状态 / 需求(R<n>) / 决策记录 / 待确认问题 (see .trellis/plus/templates/prd.md)")
     put("prd.md", "prd.md")
   }
-  if (ti.tier !== "S") { put("design.md", "design.md"); put("implement.md", "implement.md") }
-  if (ti.tier === "L") { put("code-map.md", "research/code-map.md"); mkdirSync(join(taskDir, "reviews"), { recursive: true }) }
-  if (ti.tier !== "S") {
+  // --prd-only: the parent task of a full-stack requirement holds the shared prd.md; design.md / implement.md belong to the children
+  const prdOnly = !!opts["prd-only"] || childrenOf(taskDir).length > 0
+  if (ti.tier !== "S" && !prdOnly) { put("design.md", "design.md"); put("implement.md", "implement.md") }
+  if (ti.tier === "L" && !prdOnly) { put("code-map.md", "research/code-map.md"); mkdirSync(join(taskDir, "reviews"), { recursive: true }) }
+  if (ti.tier !== "S" && shared.inherited) { // the sub-agents of a child read the parent's prd.md through the manifests
+    const ent = [relative(ROOT, shared.path).replace(/\\/g, "/"), "[plus] shared PRD of the parent task (requirements R<n>, decisions)"]
+    for (const kind of ["implement", "check"]) {
+      const jp = join(taskDir, `${kind}.jsonl`)
+      if (!existsSync(jp) || readJsonl(jp).some((e) => e.file === ent[0])) continue
+      appendFileSync(jp, (read(jp)?.endsWith("\n") || !read(jp) ? "" : "\n") + JSON.stringify({ file: ent[0], reason: ent[1] }) + "\n")
+      rep.note(`${kind}.jsonl += ${ent[0]}`)
+    }
+  }
+  if (ti.tier !== "S" && !prdOnly) {
     const guide = [".trellis/spec/guides/plus-testing-guide.md", "[plus] unit-test rules for Java 8 + JUnit5 + Mockito"]
     for (const kind of ["implement", "check"]) {
       const p = join(taskDir, `${kind}.jsonl`)
@@ -943,11 +1080,14 @@ function cmdStatus(taskDir, cfg) {
   console.log(`== status  ${rel} ==`)
   console.log(`  tier: ${ti.unset ? "(not set — propose S/M/L with reasons, ask the user, then `gate tier <task> S|M|L --reason …`)" : `${ti.tier}${ti.legacy ? " (legacy)" : ""}${ti.reason ? ` — ${ti.reason}` : ""}`}`)
   const L = cfg.limits
-  const lim = { "prd.md": L.prd, "design.md": ti.tier === "M" ? L.designM : L.designL, "implement.md": L.implement, "research/code-map.md": L.codeMap }
+  const lim = { "prd.md": L.prd, "design.md": ti.tier === "M" ? L.designM : L.designL, "implement.md": L.implement } // size hints only (warnings); research/code-map.md has no limit
+  const psrc = prdSource(taskDir)
   for (const [f, max] of Object.entries(lim)) {
-    const t = read(join(taskDir, f))
-    console.log(`  ${t === null ? "–" : bytesOf(t) > max ? "✗" : "✓"} ${f}${t === null ? " (absent)" : ` ${bytesOf(t)}/${max} bytes`}`)
+    const t = f === "prd.md" ? read(psrc.path) : read(join(taskDir, f))
+    const tag = f === "prd.md" && psrc.inherited ? " (parent's)" : ""
+    console.log(`  ${t === null ? "–" : bytesOf(t) > max ? "!" : "✓"} ${f}${tag}${t === null ? " (absent)" : ` ${bytesOf(t)}/${max} bytes${bytesOf(t) > max ? " (over the hint)" : ""}`}`)
   }
+  if (existsSync(join(taskDir, "research", "code-map.md"))) console.log("  ✓ research/code-map.md")
   for (const f of ["reviews/design-review.md", "reviews/design-review-resolution.md", "usage.md"]) console.log(`  ${existsSync(join(taskDir, f)) ? "✓" : "–"} ${f}`)
   if (ti.unset) { console.log("  next: propose the tier with reasons, let the user choose, then `gate seed <task>`"); return 0 }
   const steps = [["align", () => runGate("align", cfg, "align", () => alignGate(taskDir, cfg, ti)), "step 1.6: clarify with the user (/grill-me for M/L), fill prd.md, set 对齐状态：已对齐"]]
@@ -1226,7 +1366,7 @@ function buildBackground(taskDir, cfg) {
   const max = cfg.ocr.backgroundMaxChars
   let tj = {}
   try { tj = JSON.parse(read(join(taskDir, "task.json")) ?? "{}") } catch { /* ignore */ }
-  const prd = stripComments(read(join(taskDir, "prd.md")) ?? "")
+  const prd = stripComments(readPrd(taskDir) ?? "")
   const impl = stripComments(read(join(taskDir, "implement.md")) ?? "")
   const pSecs = sectionsOf(prd)
   const reqLines = sectionItems(findSection(pSecs, "需求")?.body ?? "").map((i) => i.text.replace(/\s+/g, " ").slice(0, 160)).slice(0, 15)
@@ -1430,7 +1570,7 @@ function main() {
   switch (cmd) {
     case "tier": return process.exit(cmdTier(resolveTask(taskArg), pos[2], opts, cfg))
     case "lightweight": console.log("note: `lightweight` is deprecated — use `gate tier <task> S --reason \"…\"`"); return process.exit(cmdTier(resolveTask(taskArg), "S", opts, cfg))
-    case "seed": return process.exit(cmdSeed(resolveTask(taskArg), cfg))
+    case "seed": return process.exit(cmdSeed(resolveTask(taskArg), cfg, opts))
     case "status": return process.exit(cmdStatus(resolveTask(taskArg), cfg))
     case "usage": return process.exit(cmdUsage(resolveTask(taskArg), opts, cfg))
     case "matrix": return process.exit(cmdMatrix(resolveTask(taskArg), opts))

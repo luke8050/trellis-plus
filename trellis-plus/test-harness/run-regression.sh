@@ -337,7 +337,7 @@ s_only_prd() { local t; t="$(newtask "$W" "so$RANDOM")"; $G tier "$t" S --reason
 chk 0 - seeded_prd_ok && chk 0 - jsonl_once && chk 0 - s_only_prd && ok "seed helpers pass on the intact gate" || bad "seed helpers pass on the intact gate"
 reverse "skeleton replacement" 1 'if (cur !== null && PRD_SKELETON_RE.test(cur) &&' 'if (false &&' chk 0 - seeded_prd_ok
 reverse "jsonl registration is deduplicated" 1 'if (readJsonl(p).some((e) => e.file === guide[0])) continue' '' chk 0 - jsonl_once
-reverse "S tier gets only prd.md" 1 'if (ti.tier !== "S") { put("design.md", "design.md"); put("implement.md", "implement.md") }' 'if (true) { put("design.md", "design.md"); put("implement.md", "implement.md") }' chk 0 - s_only_prd
+reverse "S tier gets only prd.md" 1 'if (ti.tier !== "S" && !prdOnly) { put("design.md", "design.md"); put("implement.md", "implement.md") }' 'if (!prdOnly) { put("design.md", "design.md"); put("implement.md", "implement.md") }' chk 0 - s_only_prd
 fi
 
 ############################################################################################################
@@ -430,6 +430,19 @@ check "a ### group without any requirement only warns" 0 'WARN  prd.md 需求: g
 reverse "empty group warning" 1 'for (const g of groups) if (!g.items.some(' 'for (const g of []) if (!g.items.some(' chk 0 'group "2.2 入参校验兼容" has no requirement' $G align "$T"
 goodprd; edit "$P" "| R3 | 入参为空的行为保持不变" "| R1 | 入参为空的行为保持不变"
 check "the same R<n> in two function groups is still a duplicate" 1 "duplicate R1" $G align "$T"
+# v2.2: dotted ids (R1.1) are whole ids; nested list lines are not requirements
+goodprd; edit "$P" "| R1 | 创建订单时" "| R1.1 | 创建订单时"; edit "$P" "| R2 | 重复提交对外" "| R1.2 | 重复提交对外"; edit "$P" "| R3 | 入参为空" "| R2.1 | 入参为空"
+check "dotted ids R1.1 / R1.2 / R2.1 are 3 distinct requirements (no duplicate R1)" 0 "3 requirement\(s\)" $G align "$T"
+reverse "dotted requirement ids" 1 'const R_HEAD_RE = /^R\d+(?:\.\d+)*\b/' 'const R_HEAD_RE = /^R\d+\b/' chk 0 "3 requirement\(s\)" $G align "$T"
+goodprd; python3 - "$P" <<'PY4'
+import sys
+f = sys.argv[1]; s = open(f, encoding="utf8").read()
+a = s.index("## 2 需求与验收"); b = s.index("## 3 非目标")
+open(f, "w", encoding="utf8").write(s[:a] + "## 2 需求与验收\n\n- R1 创建订单时订单号已存在则拒绝\n  - 验收：第二次创建仍只有 1 条\n- R2 重复提交返回 409\n  - 验收：状态码 409\n- R3 入参为空行为不变\n    - 验收：仍抛 IllegalArgumentException\n\n" + s[b:])
+PY4
+check "a list with nested acceptance lines: only the R lines are requirements" 0 "3 requirement\(s\)" $G align "$T"
+reverse "nested list lines are not requirements" 1 'm[1].replace(/\t/g, "  ").length >= 2 &&' 'false &&' chk 0 "3 requirement\(s\)" $G align "$T"
+goodprd
 goodprd; edit "$P" "### 2.2 入参校验兼容" "### 2.2 【填写：功能或需求模块名】"
 check "an unfilled group heading from the template is a placeholder error" 1 "prd.md:[0-9]+ unresolved placeholder: ### 2.2" $G align "$T"
 bg_all() { local t; t="$(newtask "$W" "bga$RANDOM")"; cp "$SAMPLE/prd.md" "$W/$t/prd.md"; FAKE_OCR_FINDINGS_FILE="$FXO/findings-empty.json" $G ocr --task "$t" --run >/dev/null 2>&1
@@ -440,9 +453,9 @@ reverse "background reads every requirement table" 1 'for (const t of tablesOf(b
 goodprd; edit "$P" "- 目标：同一订单号只能成功创建一次" "- 目标：【填写：目标】"
 check "an unresolved placeholder fails" 1 "prd.md:[0-9]+ unresolved placeholder" $G align "$T"
 reverse "placeholder check" 1 'if (!PLACEHOLDER_RE.test(line)) return' 'return' chk 1 "unresolved placeholder" $G align "$T"
-goodprd; python3 -c "print('x' * 11000)" >> "$P"
-check "prd.md over 10 KB fails" 1 "prd.md is [0-9]+ bytes \(> 10240\)" $G align "$T"
-reverse "prd size limit" 1 'if (bytesOf(raw) > cfg.limits.prd) soft(' 'if (false) soft(' chk 1 "prd.md is" $G align "$T"
+goodprd; python3 -c "print('<!-- ' + 'x' * 11000 + ' -->')" >> "$P"
+check "prd.md over 10 KB only warns (size is a hint, never blocks)" 0 "WARN  prd.md is [0-9]+ bytes \(> 10240\)" $G align "$T"
+reverse "prd size hint" 1 'if (bytesOf(raw) > cfg.limits.prd) rep.warn(' 'if (false) rep.warn(' chk 0 "WARN  prd.md is" $G align "$T"
 # warnings only
 goodprd; edit "$P" "| D3 | 入参为空是否一并调整 | 不调整，保持现状 | 代码 src/main/java/com/acme/OrderService.java:8 | R3 |" "| D3 | 入参为空是否一并调整 | 不调整，保持现状 |  | R9 |"
 check "a decision without source / citing an unknown R only warns" 0 "WARN  prd.md D3: needs both|WARN  prd.md D3: 影响 cites R9" $G align "$T"
@@ -472,41 +485,55 @@ check "anchor with a hallucinated symbol fails" 1 'symbol "placeOrderV2" not fou
 reverse "anchor symbol" 1 'if (!slice.includes(bare))' 'if (false)' chk 1 "not found within" $G lint-plan "$T"
 good; editall "$D" "src/main/java/com/acme/OrderService.java:7#create" "src/main/java/com/acme/Missing.java:7#create"
 check "anchor on a missing file fails" 1 "Missing.java:7#create — file does not exist" $G lint-plan "$T"
-reverse "anchor file existence" 1 'if (!abs.startsWith(ROOT) || !existsSync(abs)) { rep.error(`${name}: anchor' 'if (false) { rep.error(`${name}: anchor' chk 1 "file does not exist" $G lint-plan "$T"
+reverse "anchor file existence" 1 'if (cands.length === 0) { rep.error(`${name}: anchor' 'if (false) { rep.error(`${name}: anchor' chk 1 "file does not exist" $G lint-plan "$T"
+# short paths: the full path is NOT required, the file is looked up in the repo
+good; editall "$D" "src/main/java/com/acme/OrderService.java:7#create" "OrderService.java:7#create"
+check "a bare file name in an anchor resolves (no full path needed)" 0 "PASS" $G lint-plan "$T"
+good; editall "$D" "src/main/java/com/acme/OrderService.java:7#create" "acme/OrderService.java:7#create"
+check "a partial path (suffix) in an anchor resolves" 0 "PASS" $G lint-plan "$T"
+good; editall "$D" "src/main/java/com/acme/OrderService.java:7#create" "OrderService.java:30#create"
+check "a short path is still verified: line out of range fails" 1 "OrderService.java:30#create — line out of range" $G lint-plan "$T"
+good; editall "$D" "src/main/java/com/acme/OrderService.java:7#create" "OrderService.java:7#hallucinated"
+check "a short path is still verified: unknown symbol fails" 1 'symbol "hallucinated" not found within' $G lint-plan "$T"
+good; editall "$D" "src/main/java/com/acme/OrderService.java:7#create" "OrderService.java:7#create"
+reverse "short path lookup" 1 'return fileIndex().filter((x) => x === f || x.endsWith("/" + f))' 'return []' chk 0 "PASS" $G lint-plan "$T"
+mkdir -p "$W/other/src/main/java/com/acme" && printf 'package com.acme;\npublic class OrderService { public int create() { return 2; } }\n' > "$W/other/src/main/java/com/acme/OrderService.java"
+check "a name shared by two files warns (write a longer path) but is verified against the candidates" 0 "WARN  design.md: anchor OrderService.java matches 2 files" $G lint-plan "$T"
+rm -rf "$W/other"; good
 good; editall "$M" "OrderService.java:9#insert" "OrderService.java:99#insert"
 check "anchors in research/code-map.md are verified too" 1 "research/code-map.md: anchor .*:99#insert — line out of range" $G lint-plan "$T"
 good; editall "$I" "OrderService.java\`" "OrderService.java:4#nothing\`"
 good
 # required sections
-dropsection "$D" "## 7 异常与边界"
-check "missing required design section fails" 1 'design.md missing section "## 7 异常与边界"' $G lint-plan "$T"
-reverse "required design sections" 1 'if (!s) { soft(`design.md missing section' 'if (false) { soft(`design.md missing section' chk 1 'missing section "## 7' $G lint-plan "$T"
+dropsection "$D" "## 6 异常与边界"
+check "missing required design section fails" 1 'design.md missing section "## 6 异常与边界"' $G lint-plan "$T"
+reverse "required design sections" 1 'if (!s) { soft(`design.md missing section' 'if (false) { soft(`design.md missing section' chk 1 'missing section "## 6' $G lint-plan "$T"
 good; python3 - "$D" <<'PY'
 import sys
-f = sys.argv[1]; s = open(f, encoding="utf8").read(); a = s.index("## 12 开放问题"); open(f, "w", encoding="utf8").write(s[:a] + "## 12 开放问题\n\n")
+f = sys.argv[1]; s = open(f, encoding="utf8").read(); a = s.index("## 11 开放问题"); open(f, "w", encoding="utf8").write(s[:a] + "## 11 开放问题\n\n")
 PY
-check "an empty design section fails (write 无 / 省略：原因)" 1 'section "12 开放问题" is empty' $G lint-plan "$T"
+check "an empty design section fails (write 无 / 省略：原因)" 1 'section "11 开放问题" is empty' $G lint-plan "$T"
 reverse "empty section check" 1 'if (s.body.replace(/\s+/g, " ").trim().length === 0) soft(`design.md section' 'if (false) soft(`design.md section' chk 1 "is empty" $G lint-plan "$T"
-# 5 数据库变更: one chapter with ALL database changes (or "无变更：原因")
+# 4 数据库变更: one chapter with ALL database changes (or "无变更：原因")
 good; check "the shipped sample (数据库变更 = 无变更：原因) passes" 0 "PASS" $G lint-plan "$T"
-dropsection "$D" "## 5 数据库变更"
-check "L: missing 数据库变更 chapter fails" 1 'design.md missing section "## 5 数据库变更"' $G lint-plan "$T"
-reverse "数据库变更 is a required chapter" 1 '["数据库变更", "5 数据库变更"], ' '' chk 1 'missing section "## 5 数据库变更"' $G lint-plan "$T"
+dropsection "$D" "## 4 数据库变更"
+check "L: missing 数据库变更 chapter fails" 1 'design.md missing section "## 4 数据库变更"' $G lint-plan "$T"
+reverse "数据库变更 is a required chapter" 1 '["数据库变更", "4 数据库变更"], ' '' chk 1 'missing section "## 4 数据库变更"' $G lint-plan "$T"
 good; python3 - "$D" <<'PY2'
 import sys
-f = sys.argv[1]; s = open(f, encoding="utf8").read(); a = s.index("## 5 数据库变更"); b = s.index("## 6 详细设计"); open(f, "w", encoding="utf8").write(s[:a] + "## 5 数据库变更\n\n" + s[b:])
+f = sys.argv[1]; s = open(f, encoding="utf8").read(); a = s.index("## 4 数据库变更"); b = s.index("## 5 详细设计"); open(f, "w", encoding="utf8").write(s[:a] + "## 4 数据库变更\n\n" + s[b:])
 PY2
-check "an empty 数据库变更 chapter fails (write 无变更：原因)" 1 'section "5 数据库变更" is empty' $G lint-plan "$T"
+check "an empty 数据库变更 chapter fails (write 无变更：原因)" 1 'section "4 数据库变更" is empty' $G lint-plan "$T"
 good; python3 - "$D" <<'PY2'
 import sys
-f = sys.argv[1]; s = open(f, encoding="utf8").read(); a = s.index("## 5 数据库变更"); b = s.index("## 6 详细设计")
-open(f, "w", encoding="utf8").write(s[:a] + "## 5 数据库变更\n\n| 对象 | 变更类型 | 变更内容 | 兼容与回滚 | 对应R |\n| --- | --- | --- | --- | --- |\n| orders | 加字段 | ADD COLUMN dedup_key VARCHAR(64) NULL COMMENT '去重键' | 存量为空；回滚 DROP COLUMN | R1 |\n\n" + s[b:])
+f = sys.argv[1]; s = open(f, encoding="utf8").read(); a = s.index("## 4 数据库变更"); b = s.index("## 5 详细设计")
+open(f, "w", encoding="utf8").write(s[:a] + "## 4 数据库变更\n\n| 对象 | 变更类型 | 变更内容 | 兼容与回滚 | 对应R |\n| --- | --- | --- | --- | --- |\n| orders | 加字段 | ADD COLUMN dedup_key VARCHAR(64) NULL COMMENT '去重键' | 存量为空；回滚 DROP COLUMN | R1 |\n\n" + s[b:])
 PY2
 check "a real database change table passes" 0 "PASS" $G lint-plan "$T"
 good; python3 - "$D" <<'PY2'
 import sys
-f = sys.argv[1]; s = open(f, encoding="utf8").read(); a = s.index("## 5 数据库变更"); b = s.index("## 6 详细设计")
-open(f, "w", encoding="utf8").write(s[:a] + "## 5 数据库变更\n\n| 对象 | 变更类型 | 变更内容 | 兼容与回滚 | 对应R |\n| --- | --- | --- | --- | --- |\n| 【填写：表名】 | 加字段 | x | y | R1 |\n\n" + s[b:])
+f = sys.argv[1]; s = open(f, encoding="utf8").read(); a = s.index("## 4 数据库变更"); b = s.index("## 5 详细设计")
+open(f, "w", encoding="utf8").write(s[:a] + "## 4 数据库变更\n\n| 对象 | 变更类型 | 变更内容 | 兼容与回滚 | 对应R |\n| --- | --- | --- | --- | --- |\n| 【填写：表名】 | 加字段 | x | y | R1 |\n\n" + s[b:])
 PY2
 check "an unfilled template row in 数据库变更 is a placeholder error" 1 "design.md:[0-9]+ unresolved placeholder" $G lint-plan "$T"
 good; python3 - "$D" <<'PY2'
@@ -516,31 +543,38 @@ open(f, "w", encoding="utf8").write(s[:a] + "【填写：入口方法()】  // �
 PY2
 check "an unfilled slot inside the pseudo-code block is a placeholder error" 1 "design.md:[0-9]+ unresolved placeholder: 【填写：入口方法" $G lint-plan "$T"
 good
-TMd="$(mkplan lpmd M)"; dropsection "$W/$TMd/design.md" "## 5 数据库变更"
-check "M: 数据库变更 is required too" 1 'design.md missing section "## 5 数据库变更"' $G lint-plan "$TMd"
-LAST="$(sed -n '/^## 6 详细设计/,/^## 7 /p' "$SAMPLE/design.md")"; hasnt "sample: 详细设计 has neither 主流程 nor 数据结构 (moved / removed)" "主流程|数据结构"; has "sample: 关键逻辑 is pseudo-code in a code block" '^```'
-LAST="$(sed -n '/^## 6 详细设计/,/^## 7 /p' "$TOOL/assets/plus/templates/design.md")"; hasnt "template: 详细设计 has neither 主流程 nor 数据结构" "主流程|数据结构"; has "template: 关键逻辑 pseudo-code tree" "├──"; has "template: 字段与口径 limited to changed fields" "只写本次新增或修改的字段"
-good; dropsection "$D" "## 2 术语与约定"; dropsection "$D" "## 9 非功能"
-check "L: sections 2 and 9 are required" 1 'missing section "## 2 术语与约定"' $G lint-plan "$T"
-TM="$(mkplan lpm M)"; DM="$W/$TM/design.md"; dropsection "$DM" "## 2 术语与约定"; dropsection "$DM" "## 9 非功能"
-check "M: sections 2 and 9 may be omitted" 0 "tier M" $G lint-plan "$TM"
-reverse "M may omit sections 2/9" 1 'const need = ti.tier === "L" ? [...DESIGN_ALWAYS, ...DESIGN_L_ONLY] : DESIGN_ALWAYS' 'const need = [...DESIGN_ALWAYS, ...DESIGN_L_ONLY]' chk 0 "tier M" $G lint-plan "$TM"
+TMd="$(mkplan lpmd M)"; dropsection "$W/$TMd/design.md" "## 4 数据库变更"
+check "M: 数据库变更 is required too" 1 'design.md missing section "## 4 数据库变更"' $G lint-plan "$TMd"
+LAST="$(sed -n '/^## 5 详细设计/,/^## 6 /p' "$SAMPLE/design.md")"; hasnt "sample: 详细设计 has neither 主流程 nor 数据结构 (moved / removed)" "主流程|数据结构"; has "sample: 关键逻辑 is pseudo-code in a code block" '^```'
+LAST="$(sed -n '/^## 5 详细设计/,/^## 6 /p' "$TOOL/assets/plus/templates/design.md")"; hasnt "template: 详细设计 has neither 主流程 nor 数据结构" "主流程|数据结构"; has "template: 关键逻辑 pseudo-code tree" "├──"; has "template: 字段与口径 limited to changed fields" "只写本次新增或修改的字段"
+good; dropsection "$D" "## 2 术语与约定"; dropsection "$D" "## 8 非功能"
+check "L: sections 2 and 8 are required" 1 'missing section "## 2 术语与约定"' $G lint-plan "$T"
+TM="$(mkplan lpm M)"; DM="$W/$TM/design.md"; dropsection "$DM" "## 2 术语与约定"; dropsection "$DM" "## 8 非功能"
+check "M: sections 2 and 8 may be omitted" 0 "tier M" $G lint-plan "$TM"
+reverse "M may omit sections 2/8" 1 'const need = ti.tier === "L" ? [...DESIGN_ALWAYS, ...DESIGN_L_ONLY] : DESIGN_ALWAYS' 'const need = [...DESIGN_ALWAYS, ...DESIGN_L_ONLY]' chk 0 "tier M" $G lint-plan "$TM"
 good; rm -f "$M"
 check "L: research/code-map.md is required" 1 "research/code-map.md missing" $G lint-plan "$T"
 check "M: no code-map needed" 0 "PASS" $G lint-plan "$TM"
 good; rm -f "$D"
 check "design.md missing fails" 1 "design.md missing" $G lint-plan "$T"
 good
-# requirement coverage
-editall "$D" "| R1, R3 | OrderMapper |" "| R1 | OrderMapper |"
-check "a requirement without a module fails (omission)" 1 "R3 has no module in design.md 模块拆分" $G lint-plan "$T"
-reverse "requirement → module coverage" 1 'for (const q of reqIds) if (!covered.has(q)) rep.error(' 'for (const q of reqIds) if (false) rep.error(' chk 1 "R3 has no module" $G lint-plan "$T"
-good; dropline "$D" "| R3 | OrderService | OrderServiceTest#create_null_throws |"
+# requirement coverage (v2.2: there is no 模块拆分 chapter; coverage = 覆盖矩阵)
+LAST="$(cat "$D")"; hasnt "the sample has no 模块拆分 chapter" "模块拆分"
+LAST="$(cat "$TOOL/assets/plus/templates/design.md")"; hasnt "the template has no 模块拆分 chapter" "模块拆分"
+dropline "$D" "| R3 | OrderService | OrderServiceTest#create_null_throws |"
 check "a requirement missing from the coverage matrix fails" 1 "R3 is missing from design.md 覆盖矩阵" $G lint-plan "$T"
-reverse "coverage matrix" 1 'if (cov) for (const q of reqIds)' 'if (false) for (const q of reqIds)' chk 1 "R3 is missing from design.md 覆盖矩阵" $G lint-plan "$T"
-good; editall "$D" "| R1, R3 | OrderMapper |" "| R1, R3, R7 | OrderMapper |"
-check "an unknown R in the module table fails" 1 "cites R7, which prd.md does not define" $G lint-plan "$T"
-reverse "unknown R reference" 1 'if (reqIds.length && !reqIds.includes(r)) rep.error(`${name} cites' 'if (false) rep.error(`${name} cites' chk 1 "cites R7" $G lint-plan "$T"
+reverse "coverage matrix" 1 'else for (const q of leafIds(reqIds)) if (!covCited.has(q)) soft(' 'else for (const q of leafIds(reqIds)) if (false) soft(' chk 1 "R3 is missing from design.md 覆盖矩阵" $G lint-plan "$T"
+good; editall "$D" "| R3 | OrderService | OrderServiceTest#create_null_throws |" "| R3, R7 | OrderService | OrderServiceTest#create_null_throws |"
+check "an unknown R in the coverage matrix fails" 1 "cites R7, which prd.md does not define" $G lint-plan "$T"
+reverse "unknown R reference" 1 'if (reqIds.length && !knownId(r, reqIds)) rep.error(`${name} cites' 'if (false) rep.error(`${name} cites' chk 1 "cites R7" $G lint-plan "$T"
+good
+# dotted ids in the plan: citing the group R1 covers R1.1 and R1.2
+good; edit "$W/$T/prd.md" "| R1 | 创建订单时，订单号已存在则拒绝创建 |" "| R1.1 | 创建订单时，订单号已存在则拒绝创建 |"
+edit "$W/$T/prd.md" $'\n\n### 2.2 入参校验兼容' $'\n| R1.2 | 附加需求 | 附加验收 |\n\n### 2.2 入参校验兼容'
+check "citing a group (R1) in the plan covers its children R1.1 / R1.2" 0 "PASS" $G lint-plan "$T"
+reverse "group citation covers children" 1 'for (const o of ids) if (o.startsWith(c + ".")) out.add(o)' '' chk 0 "PASS" $G lint-plan "$T"
+editall "$D" "| R1 | OrderService |" "| R1.1 | OrderService |"
+check "a child (R1.2) missing from the coverage matrix fails" 1 "R1.2 is missing from design.md 覆盖矩阵" $G lint-plan "$T"
 good
 # impact analysis
 editall "$D" '"OrderService.create"` → 1' '"OrderService.create"` → 7'
@@ -557,7 +591,7 @@ good
 # implement.md: files, tests
 editall "$I" 'src/main/java/com/acme/OrderController.java`' 'src/main/java/com/acme/Ghost.java`'
 check "a path that does not exist fails" 1 'Ghost.java` does not exist' $G lint-plan "$T"
-reverse "implement path existence" 1 'if (!abs.startsWith(ROOT) || !existsSync(abs)) { if (!isNew)' 'if (false) { if (!isNew)' chk 1 "does not exist" $G lint-plan "$T"
+reverse "implement path existence" 1 'if (cands.length === 0 && !isNew) rep.error(' 'if (false) rep.error(' chk 1 "does not exist" $G lint-plan "$T"
 editall "$I" "改什么：post 捕获" "改什么：新增 post 捕获"
 check "...the same path in a step marked 新增 passes" 0 "PASS" $G lint-plan "$T"
 good; dropline "$I" "| R2 | OrderControllerTest"
@@ -568,25 +602,28 @@ check "a Service without a 边界 case fails" 1 "OrderService has no 边界 case
 reverse "matrix case types" 1 'if (!rows.some((r) => re.test(col(r, ["类型", "type"]))))' 'if (false)' chk 1 "has no 边界 case" $G lint-plan "$T"
 good; dropline "$I" "| R2 | OrderControllerTest"; editall "$I" $'## 3 测试豁免\n\n无' $'## 3 测试豁免\n\n- src/main/java/com/acme/OrderController.java: thin controller covered by the contract suite'
 check "an exempted Controller needs no rows (and is flagged for sign-off)" 0 "WARN  EXEMPT src/main/java/com/acme/OrderController.java" $G lint-plan "$T"
-reverse "test exemption" 1 'if (!isSvcCtl(f) || exempt.has(f)) continue' 'if (!isSvcCtl(f)) continue' chk 0 "WARN  EXEMPT" $G lint-plan "$T"
+reverse "test exemption" 1 'if (!isSvcCtl(f) || exempt.has(f) || exempt.has(written)) continue' 'if (!isSvcCtl(f)) continue' chk 0 "WARN  EXEMPT" $G lint-plan "$T"
 good; editall "$I" "| R3 | OrderServiceTest | create_null_throws" "| R8 | OrderServiceTest | create_null_throws"
 check "an unknown R in the test matrix fails" 1 "implement.md 测试矩阵 cites R8" $G lint-plan "$T"
 good
 # size limits
 python3 -c "print('y' * 31000)" >> "$D"
-check "design.md over the L limit fails" 1 "design.md is [0-9]+ bytes \(> 30720\)" $G lint-plan "$T"
-reverse "size limits" 1 'if (b > max) soft(' 'if (false) soft(' chk 1 "design.md is" $G lint-plan "$T"
+check "design.md over the L hint only warns (size never blocks)" 0 "WARN  design.md is [0-9]+ bytes \(> 30720\)" $G lint-plan "$T"
+reverse "size hints" 1 'if (b > max) rep.warn(' 'if (false) rep.warn(' chk 0 "WARN  design.md is" $G lint-plan "$T"
+good; python3 -c "print('z' * 30000)" >> "$M"
+check "research/code-map.md has NO size limit (it is not injected into sub-agents)" 0 "PASS" $G lint-plan "$T"
+hasnt "...and no size warning for it either" "code-map.md is [0-9]+ bytes"
 good; python3 -c "print('y' * 13000)" >> "$DM"
-check "M: design.md over 12 KB fails" 1 "design.md is [0-9]+ bytes \(> 12288\)" $G lint-plan "$TM"
-reverse "M has a lower design limit" 1 'const dLimit = ti.tier === "M" ? L.designM : L.designL' 'const dLimit = L.designL' chk 1 "> 12288" $G lint-plan "$TM"
+check "M: design.md over 12 KB only warns" 0 "WARN  design.md is [0-9]+ bytes \(> 12288\)" $G lint-plan "$TM"
+reverse "M has a lower design hint" 1 'const dLimit = ti.tier === "M" ? L.designM : L.designL' 'const dLimit = L.designL' chk 0 "> 12288" $G lint-plan "$TM"
 good; python3 -c "print('y' * 13000)" >> "$D"; check "...a 13 KB design is fine for L" 0 "PASS" $G lint-plan "$T"
 good; fill "$TM" M; cp "$W/.trellis/plus/plus.config.json" "$WORK/plus.config.bak"
 python3 - "$W/.trellis/plus/plus.config.json" <<'PY'
 import json, sys
 f = sys.argv[1]; c = json.load(open(f)); c["limits"]["total"] = 6000; json.dump(c, open(f, "w"), indent=2)
 PY
-check "prd+design+implement over the total limit fails" 1 "prd\+design\+implement is [0-9]+ bytes \(> 6000\)" $G lint-plan "$T"
-reverse "total limit" 1 'if (total > L.total) soft(' 'if (false) soft(' chk 1 "prd\+design\+implement is" $G lint-plan "$T"
+check "prd+design+implement over the total hint only warns" 0 "WARN  prd\+design\+implement is [0-9]+ bytes \(> 6000\)" $G lint-plan "$T"
+reverse "total hint" 1 'if (total > L.total) rep.warn(' 'if (false) rep.warn(' chk 0 "WARN  prd\+design\+implement is" $G lint-plan "$T"
 cp "$WORK/plus.config.bak" "$W/.trellis/plus/plus.config.json"
 # tier M: at most 3 classes
 for n in A B C D; do printf 'package com.acme;\npublic class %sService { public int f() { return 1; } }\n' $n > "$W/src/main/java/com/acme/${n}Service.java"; done
@@ -609,7 +646,7 @@ import sys
 f = sys.argv[1]; s = open(f, encoding="utf8").read()
 s = s.replace("| B 数据库唯一索引 | 彻底杜绝重复 | 需迁移存量重复数据，发布窗口长 | 放弃，另立项 |\n", "")
 s = s.replace("| 并发提交 | 两请求同时通过查重 | 可能各插入一条，本次接受，索引另立项 | 无（已在第 0 节说明） |", "| 并发提交 | 两请求同时通过查重 | 可能各插入一条，本次接受，索引另立项 |  |")
-s = s.replace("## 12 开放问题\n\n无", "## 12 开放问题\n\n- [ ] 唯一索引何时立项")
+s = s.replace("## 11 开放问题\n\n无", "## 11 开放问题\n\n- [ ] 唯一索引何时立项")
 open(f, "w", encoding="utf8").write(s)
 PY
 check "整体方案 without any alternatives table passes (no comparison is required)" 0 "PASS" $G lint-plan "$T"
@@ -632,7 +669,7 @@ if want F; then
 echo "== F. anchors / matrix / status / usage (0-token helpers)"
 mkproj "$WORK/f"; cd "$W"; setprof strict
 T="$(mkplan hp L)"; D="$W/$T/design.md"; I="$W/$T/implement.md"; M="$W/$T/research/code-map.md"; good() { fill "$T" L; }
-check "anchors: the sample's anchors verify" 0 "4 distinct anchor\(s\) verified" $G anchors "$T"
+check "anchors: the sample's anchors verify" 0 "5 distinct anchor\(s\) verified" $G anchors "$T"
 editall "$M" '搜索：`git grep -n "order_no"`' '搜索：待查'
 check "anchors: NOT-FOUND without the search command only warns" 0 "WARN  research/code-map.md:[0-9]+ NOT-FOUND without the search command" $G anchors "$T"
 reverse "NOT-FOUND needs a command" 1 'if (/NOT-FOUND/.test(line) && !/`[^`]+`/.test(line))' 'if (false)' chk 0 "NOT-FOUND without the search command" $G anchors "$T"
@@ -641,6 +678,7 @@ check "anchors: a wrong symbol in code-map fails" 1 'research/code-map.md: ancho
 good
 check "matrix prints R → module → test" 0 "\| R1 \| OrderService \| OrderServiceTest#create_valid_savesAndReturnsId" $G matrix "$T"
 check "matrix --check passes on a complete plan" 0 "R3 \| OrderService" $G matrix "$T" --check
+hasnt "matrix: no 模块拆分 reference any more" "模块拆分"
 dropline "$I" "| R3 | OrderServiceTest"
 check "matrix --check fails when a requirement has no test row" 1 "R3: no row in implement.md 测试矩阵" $G matrix "$T" --check
 reverse "matrix --check exit code" 1 'return opts.check && gaps.length ? 1 : 0' 'return 0' chk 1 "R3: no row" $G matrix "$T" --check
@@ -1530,6 +1568,61 @@ setcfg '{"gates":{"hook":"off"}}'
 check "gates.hook=off: the hook is skipped" 0 "the hook is off \(gates.hook\)" $G pre-commit --hook
 reverse "hook off skips" 1 'if (hook && gateMode(cfg, "hook") === "off") {' 'if (false) {' chk 0 "the hook is off" $G pre-commit --hook
 cp "$WORK/n2.cfg" "$W/.trellis/plus/plus.config.json"
+fi
+
+############################################################################################################
+if want P; then
+echo "== P. full-stack: one shared PRD on the parent, design + implement per child task"
+mkproj "$WORK/p"; cd "$W"
+PT="$(newtask "$W" fs)"; $G tier "$PT" L --reason "regression: full stack" >/dev/null
+cp "$SAMPLE/prd.md" "$W/$PT/prd.md"
+mkchild() { ( cd "$W" && python3 .trellis/scripts/task.py create "$1" --slug "$1" --parent "$PT" --description "child" >/dev/null 2>&1 ); ls -d "$W"/.trellis/tasks/*-"$1" | sed "s#^$W/##"; }
+CB="$(mkchild fsb)"; CF="$(mkchild fsf)"
+check "a child task inherits the parent's tier" 0 "tier: L .*inherited from parent" $G tier "$CB"
+reverse "tier inheritance" 1 'if (TIERS.includes(pt)) return {' 'if (false) return {' chk 0 "inherited from parent" $G tier "$CB"
+check "seed on the parent with children creates the prd only" 0 "Next:" $G seed "$PT"
+[ ! -f "$W/$PT/design.md" ] && ok "...no design.md / implement.md on the parent" || bad "parent got a design.md"
+check "seed on a child creates design + implement and a pointer prd.md" 0 "prd.md is a pointer to the parent's shared PRD" $G seed "$CB"
+[ -f "$W/$CB/design.md" ] && [ -f "$W/$CB/implement.md" ] && ok "...design.md and implement.md exist in the child" || bad "child design/implement missing"
+run grep -c "$PT/prd.md" "$W/$CB/implement.jsonl" "$W/$CB/check.jsonl"; has "...the parent's prd.md is registered in implement.jsonl" "implement.jsonl:1"; has "...and in check.jsonl" "check.jsonl:1"
+check "seed twice does not duplicate the manifest entry" 0 "Next:" $G seed "$CB"
+run grep -c "$PT/prd.md" "$W/$CB/implement.jsonl"; has "...(still exactly one entry)" "^1$"
+check "align on a child checks the parent's PRD" 0 "inherited from the parent task" $G align "$CB"
+reverse "child reads the parent's PRD" 1 'if (par && !/^对齐状态[:：]/m.test(stripComments(read(own) ?? ""))) {' 'if (false) {' chk 0 "inherited from the parent task" $G align "$CB"
+# the backend child covers R1 and R3, the frontend child only R2
+cp "$SAMPLE/design.md" "$W/$CB/design.md"; cp "$FX/implement.md" "$W/$CB/implement.md"; mkdir -p "$W/$CB/research" "$W/$CF/research"; cp "$FX/code-map.md" "$W/$CB/research/code-map.md"; cp "$FX/code-map.md" "$W/$CF/research/code-map.md"
+python3 - "$W/$CB/design.md" <<'PY5'
+import sys
+f = sys.argv[1]; s = open(f, encoding="utf8").read()
+s = s.replace("| R2 | OrderController | OrderControllerTest#post_duplicate_returns409 |\n", "")
+open(f, "w", encoding="utf8").write(s)
+PY5
+check "child lint-plan: warns about a requirement no child covers yet (R2)" 0 "WARN  requirement\(s\) not yet in the 覆盖矩阵 of any child task.*R2" $G lint-plan "$CB"
+reverse "family coverage hint" 1 'if (missing.length) rep[level](' 'if (false) rep[level](' chk 0 "not yet in the 覆盖矩阵 of any child" $G lint-plan "$CB"
+cp "$SAMPLE/design.md" "$W/$CF/design.md"; cp "$FX/implement.md" "$W/$CF/implement.md"
+python3 - "$W/$CF/design.md" <<'PY6'
+import sys
+f = sys.argv[1]; s = open(f, encoding="utf8").read()
+s = s.replace("| R1 | OrderService | OrderServiceTest#create_duplicate_throws |\n", "").replace("| R3 | OrderService | OrderServiceTest#create_null_throws |\n", "")
+open(f, "w", encoding="utf8").write(s)
+PY6
+run $G lint-plan "$CB"; hasnt "once both children are drafted, no uncovered requirement is reported" "not yet in the 覆盖矩阵"
+check "a child 覆盖矩阵 citing no requirement fails" 1 "覆盖矩阵 cites no requirement" env TRELLIS_PLUS_X=1 bash -c "cd '$W' && python3 - '$W/$CF/design.md' <<'PY7'
+import sys,re
+f = sys.argv[1]; s = open(f, encoding='utf8').read()
+a = s.index('## 10 覆盖矩阵'); b = s.index('上线检查：')
+open(f, 'w', encoding='utf8').write(s[:a] + '## 10 覆盖矩阵与上线检查\n\n| 需求 | 模块 | 测试 |\n| --- | --- | --- |\n| 无 | x | y |\n\n' + s[b:])
+PY7
+node .trellis/plus/gate.mjs lint-plan '$CF'"
+cp "$SAMPLE/design.md" "$W/$CF/design.md"
+python3 - "$W/$CF/design.md" <<'PY6'
+import sys
+f = sys.argv[1]; s = open(f, encoding="utf8").read()
+s = s.replace("| R1 | OrderService | OrderServiceTest#create_duplicate_throws |\n", "").replace("| R3 | OrderService | OrderServiceTest#create_null_throws |\n", "")
+open(f, "w", encoding="utf8").write(s)
+PY6
+check "parent lint-plan: design/implement live in the children" 0 "parent task with 2 child task\(s\)" $G lint-plan "$PT"
+check "matrix on the parent prints the whole family" 0 "\| R2 \| .*OrderController" $G matrix "$PT"
 fi
 
 echo

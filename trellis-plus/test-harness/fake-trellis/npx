@@ -1,0 +1,8 @@
+#!/bin/bash
+# fake `npx`: `npx --version`, or `npx -y -p <spec> trellis <args...>` -> logs the spec and hands <args...> to the fake trellis.
+HERE="$(cd "$(dirname "$0")" && pwd)"
+[ "$1" = "--version" ] && { echo "10.0.0"; exit 0; }
+[ -n "$FAKE_TRELLIS_LOG" ] && echo "npx $*" >> "$FAKE_TRELLIS_LOG"
+while [ $# -gt 0 ] && [ "$1" != "trellis" ]; do shift; done
+shift
+FAKE_TRELLIS_LOG="" exec "$HERE/trellis" "$@"

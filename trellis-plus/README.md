@@ -11,13 +11,15 @@ v2 相对 v1.1 做减法：删掉 alignment 门禁、三个 reviewer、REQ/DES/I
 ## 使用
 
 ```bash
+node trellis-plus.mjs install <project> -u <name>   # 一条命令：固定版本 Trellis 0.6.17 init + apply --all + doctor
+node trellis-plus.mjs update  <project>             # 升级已装项目（spec/ tasks/ workspace/ config.yaml 等逐字节保留）
 node trellis-plus.mjs apply  <project> --all      # 硬门禁 + plugin 补丁 + agent 补丁 + git hook
 node trellis-plus.mjs apply  <project> --dry-run  # 先看会改什么
 node trellis-plus.mjs doctor <project> [--fix]    # 每次 `trellis update` 之后跑一次
 node trellis-plus.mjs revert <project> [--purge]
 ```
 
-`<project>` 是含 `.trellis/` 与 `.opencode/` 的目录，工具本身放哪都行。`apply` 幂等；升级自 v1.1 时会清理 v1.1 装过而 v2 不再提供的文件（本地改过的保留并告警）。`/grill-me` 是**可选**的澄清助手（你自己装；没装就跳过，安装时不再检查）。`apply` 会把版本号（现为 `2.1.0`）写入 `plus.config.json` 的 `version`（只改这一个键），`doctor` 会核对。
+`<project>` 是含 `.trellis/` 与 `.opencode/` 的目录，工具本身放哪都行。`apply` 幂等；升级自 v1.1 时会清理 v1.1 装过而 v2 不再提供的文件（本地改过的保留并告警）。`/grill-me` 是**可选**的澄清助手（你自己装；没装就跳过，安装时不再检查）。`apply` 会把版本号（现为 `3.0.0`）写入 `plus.config.json` 的 `version`（只改这一个键），`doctor` 会核对。
 
 ## 新流程
 

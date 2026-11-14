@@ -1,0 +1,24 @@
+#!/bin/bash
+# fake `trellis` for the install / update tests.
+# Env: FAKE_TRELLIS_VERSION (what --version prints, default 0.6.17), FAKE_TRELLIS_BASE (pristine project: copied by `init`, files
+#      restored by `update --force`), FAKE_TRELLIS_LOG (one line per call), FAKE_TRELLIS_FAIL=1 (init exits 1),
+#      FAKE_TRELLIS_FAIL_UPDATE=1 (update exits 1), FAKE_TRELLIS_TO (version written by update, default 0.6.17),
+#      FAKE_TRELLIS_TOUCH=<rel file> (update corrupts it), FAKE_TRELLIS_DELETE=<rel file> (update deletes it).
+[ -n "$FAKE_TRELLIS_LOG" ] && echo "trellis $*" >> "$FAKE_TRELLIS_LOG"
+case "$1" in
+  --version) echo "${FAKE_TRELLIS_VERSION:-0.6.17}"; exit 0 ;;
+  init)
+    [ "$FAKE_TRELLIS_FAIL" = 1 ] && { echo "fake trellis: init failed" >&2; exit 1; }
+    cp -R "$FAKE_TRELLIS_BASE"/. "$PWD"/ && exit 0 ;;
+  update)
+    case " $* " in *" --dry-run "*) echo "fake trellis: dry-run preview"; exit 0 ;; esac
+    [ "$FAKE_TRELLIS_FAIL_UPDATE" = 1 ] && { echo "fake trellis: update failed" >&2; exit 1; }
+    # `update --force` rewrites every Trellis-managed file, config.yaml included (what the real 0.6.17 does)
+    for f in .trellis/workflow.md .trellis/scripts/task.py .trellis/config.yaml .opencode/lib/trellis-context.js \
+             .opencode/agents/trellis-implement.md .opencode/agents/trellis-check.md; do cp "$FAKE_TRELLIS_BASE/$f" "$PWD/$f"; done
+    echo "${FAKE_TRELLIS_TO:-0.6.17}" > .trellis/.version
+    [ -n "$FAKE_TRELLIS_TOUCH" ] && echo "corrupted by fake update" > "$PWD/$FAKE_TRELLIS_TOUCH"
+    [ -n "$FAKE_TRELLIS_DELETE" ] && rm -f "$PWD/$FAKE_TRELLIS_DELETE"
+    echo "fake trellis: updated"; exit 0 ;;
+esac
+exit 0

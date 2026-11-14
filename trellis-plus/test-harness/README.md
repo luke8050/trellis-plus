@@ -19,6 +19,7 @@ BASE=/path/to/a/trellis-initialized/project  bash test-harness/run-regression.sh
 | I J | 单测门禁（单模块、方法级、tier 限制、--staged、--base、git 子目录）；Maven 多模块（假 mvn） |
 | K | OCR 分诊、重跑预算、背景文件、版本检测（假 ocr） |
 | L | git hook 与任务选择 |
+| Q | `install`：固定版本 init + apply --all + doctor（假 trellis / npx：干跑、缺名字、全局版本不符走 npx、`--trellis-pkg`、init 失败不打补丁、版本不符拒绝与 `--allow-version`、幂等） |
 | M | 随包资产（reviewer agent、workflow 体积回归线、样例、无旧名称残留） |
 
 ## 约定
@@ -26,7 +27,7 @@ BASE=/path/to/a/trellis-initialized/project  bash test-harness/run-regression.sh
 - 每条门禁规则都有 **正例、反例、反向对照**：`reverse` 对已安装的 `gate.mjs` 做精确字符串变异（锚点必须恰好出现 N 次，否则本身算失败），同一检查此时必须失败；随后还原并复验。
 - 错误文案断言必须带期望文案，不能只看退出码（v1.1 有两条"通过"其实是因别的原因失败）。
 - 随包样例 `assets/spec/plus-doc-samples/{prd,design}.md` 就是 lint-plan 的正例夹具：样例改坏，回归会失败。
-- 不连真实 ocr / mvn / 网络：`fake-ocr/ocr`（`FAKE_OCR_FINDINGS_FILE`、`FAKE_OCR_VERSION`、`FAKE_OCR_REJECT_BACKGROUND`）、`fake-mvn/mvn`（`FAKE_MVN_LOG`、`FAKE_MVN_FAIL`）。
+- 不连真实 ocr / mvn / trellis / 网络：`fake-trellis/{trellis,npx}`（`FAKE_TRELLIS_BASE`、`FAKE_TRELLIS_LOG`、`FAKE_TRELLIS_VERSION`、`FAKE_TRELLIS_FAIL`）；`fake-ocr/ocr`（`FAKE_OCR_FINDINGS_FILE`、`FAKE_OCR_VERSION`、`FAKE_OCR_REJECT_BACKGROUND`）、`fake-mvn/mvn`（`FAKE_MVN_LOG`、`FAKE_MVN_FAIL`）。
 - `mkjava.sh` 造单模块 Java 场景；`fixtures/ocr/` 是各种形状的 OCR 报告；`fixtures/lint/` 是 implement / code-map 与 Java 源。
 
 ## 注意（v2.1）

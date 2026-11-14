@@ -9,6 +9,11 @@
  *   5. git pre-commit hook as the last deterministic line of defence
  *
  * Usage (the tool can live anywhere — pass the Trellis project path; no need to copy it into the project):
+ *   node trellis-plus.mjs install [<project>] [-u <name>] [--dry-run] [--allow-version] [--trellis-pkg <spec>] [--git-init]
+ *                                          one command: pinned Trellis init (--opencode) + apply --all + doctor
+ *   node trellis-plus.mjs update [<project>] [--dry-run] [--allow-version] [--allow-downgrade] [--trellis-pkg <spec>]
+ *                                          upgrade an installed project: pinned `trellis update --force` + apply (previous options) + doctor;
+ *                                          your spec/ tasks/ workspace/ .developer .current-task config.yaml are kept byte for byte
  *   node trellis-plus.mjs apply  <project> [--dry-run] [--hard-gate] [--patch-plugin] [--tune-context]
  *                                          [--patch-agents] [--git-hook] [--all] [--force]
  *   node trellis-plus.mjs doctor <project> [--fix]
@@ -36,12 +41,18 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const SEMVER_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/
 /** The tool version is NOT hard-coded: package.json (next to this file, always shipped by npm) is the single source. Set by loadToolVersion() in preflight(). */
 let TOOL_VERSION = null
+/** The Trellis version this release is built and tested against. Single source: package.json -> config.trellisVersion. */
+let TRELLIS_PIN = null
+let versionWarned = false
 function loadToolVersion() {
   const file = join(HERE, "package.json")
   let doc
   try { doc = JSON.parse(readFileSync(file, "utf8")) } catch (e) { log.err(`cannot read the tool version from ${file}: ${e.code === "ENOENT" ? "file not found" : e.message}`); return false }
   if (typeof doc?.version !== "string" || !SEMVER_RE.test(doc.version)) { log.err(`${file}: "version" must be a semver string like 2.1.1 (got ${JSON.stringify(doc?.version)})`); return false }
   TOOL_VERSION = doc.version
+  const pin = doc.config?.trellisVersion
+  if (typeof pin !== "string" || !SEMVER_RE.test(pin)) { log.err(`${file}: config.trellisVersion must be a semver string (got ${JSON.stringify(pin)})`); return false }
+  TRELLIS_PIN = pin
   return true
 }
 const ASSETS = join(HERE, "assets")
@@ -54,12 +65,14 @@ const command = argv[0] && !argv[0].startsWith("-") ? argv[0] : "help"
 const flag = (n) => argv.includes(`--${n}`)
 const opt = (n) => { const i = argv.indexOf(`--${n}`); return i >= 0 && argv[i + 1] && !argv[i + 1].startsWith("--") ? argv[i + 1] : null }
 // positional project path: first non-flag token after the command that is not the value of --root
-const positional = argv.slice(1).filter((a, i, arr) => !a.startsWith("--") && arr[i - 1] !== "--root")
+const VALUE_OPTS = new Set(["--root", "--user", "-u", "--trellis-pkg"])
+const positional = argv.slice(1).filter((a, i, arr) => !a.startsWith("-") && !VALUE_OPTS.has(arr[i - 1]))
 const rootArg = opt("root") ?? positional[0] ?? process.cwd()
 const ROOT = resolve(rootArg)
 const DRY = flag("dry-run")
 const FORCE = flag("force")
-const ALL = flag("all")
+let ALL = flag("all") || command === "install" // install always applies the full set (update decides in cmdUpdate)
+let FORCE_MANAGED = false // update: overwrite trellis-plus managed files (backed up) except under .trellis/spec/
 
 const P = {
   workflow: ".trellis/workflow.md",
@@ -128,9 +141,10 @@ function installFiles(manifest) {
     if (cur === content) { manifest.files[rel] = sha(content); same++; continue }
     if (createOnly) { kept++; log.info(`kept ${rel} (project-owned config)`); continue }
     const ours = manifest.files[rel] === sha(cur)
-    if (ours || FORCE) {
+    const forced = FORCE || (FORCE_MANAGED && !rel.startsWith(".trellis/spec/")) // update: overwrite, but never local edits inside spec/
+    if (ours || forced) {
       backup(rel); writeRel(rel, content); manifest.files[rel] = sha(content); updated++
-      log.ok(`updated ${rel}${FORCE && !ours ? " (--force over local edits)" : ""}`)
+      log.ok(`updated ${rel}${forced && !ours ? " (overwrote local edits, backup kept)" : ""}`)
     } else {
       kept++
       writeRel(rel + ".plus-new", content)
@@ -439,6 +453,7 @@ function preflight() {
   if (!exists(".opencode")) { log.err(".opencode/ not found — this tool targets the OpenCode platform (`trellis init --opencode`)"); ok = false }
   const ver = (readRel(".trellis/.version") ?? "").trim()
   log.info(`project: ${ROOT}  (trellis ${ver || "?"}, trellis-plus ${TOOL_VERSION})`)
+  if (ver && ver !== TRELLIS_PIN && !versionWarned) { versionWarned = true; log.warn(`this trellis-plus is tested with Trellis ${TRELLIS_PIN}, the project has ${ver}: patch anchors may not match (a missing anchor aborts that patch with an error)`) }
   const ocr = spawnSync("ocr", ["--version"], { encoding: "utf8" })
   if (ocr.error) log.info("`ocr` not found — step 2.5 will use delegation mode (the coding agent reviews the code itself); with ocr installed the gate runs `ocr llm test` first")
   const git = spawnSync("git", ["--version"], { encoding: "utf8" })
@@ -497,7 +512,11 @@ function cmdDoctor() {
   for (const [a, rel, createOnly] of managedFiles()) {
     const cur = readRel(rel)
     if (cur === null) problems.push(`missing file ${rel}`)
-    else if (!createOnly && cur !== readFileSync(join(ASSETS, a), "utf8")) problems.push(`file differs from this tool version: ${rel}`)
+    else if (!createOnly && cur !== readFileSync(join(ASSETS, a), "utf8")) {
+      // a local edit that apply/update deliberately kept leaves <file>.plus-new next to it: known and intended, not a fault
+      if (exists(rel + ".plus-new") && readRel(rel + ".plus-new") === readFileSync(join(ASSETS, a), "utf8")) log.warn(`${rel}: your local edit is kept; the current version is in ${rel}.plus-new — merge it when you want`)
+      else problems.push(`file differs from this tool version: ${rel}`)
+    }
   }
   const wf = readRel(P.workflow) ?? ""
   for (const n of ["index", "phase1", "phase2"]) if (!blockRe(n).test(wf)) problems.push(`workflow.md block "${n}" missing (trellis update replaced it?)`)
@@ -540,6 +559,228 @@ function cmdDoctor() {
   return 1
 }
 
+// ───────────── install: pinned Trellis init + apply --all + doctor ─────────────
+
+const IS_WIN = process.platform === "win32"
+const run = (cmd, args, o = {}) => spawnSync(IS_WIN && /^(npx|npm)$/.test(cmd) ? `${cmd}.cmd` : cmd, args, { encoding: "utf8", shell: IS_WIN, ...o })
+const shortOpt = () => { const i = argv.findIndex((a) => a === "-u" || a === "--user"); return i >= 0 && argv[i + 1] && !argv[i + 1].startsWith("-") ? argv[i + 1] : null }
+
+/** Developer name for `trellis init -u`: -u/--user, then TRELLIS_DEVELOPER, then `git config user.name` (spaces -> '-'). */
+function developerName() {
+  const raw = shortOpt() ?? process.env.TRELLIS_DEVELOPER ?? (() => { const g = run("git", ["config", "user.name"]); return g.status === 0 ? g.stdout.trim() : "" })()
+  return raw.trim().replace(/\s+/g, "-")
+}
+
+function pythonOk() {
+  const r = run("python3", ["-c", "import sys; print(sys.version_info[0]*100+sys.version_info[1])"])
+  return r.status === 0 && Number(r.stdout.trim()) >= 309
+}
+
+/** Node / python3 / git (and npx when the pinned Trellis has to be fetched). Logs every problem, returns false if any. */
+function toolchainOk(needNpx) {
+  let ok = true
+  if (Number(process.versions.node.split(".")[0]) < 18) { log.err(`Node ${process.versions.node} < 18`); ok = false }
+  if (!pythonOk()) { log.err("python3 >= 3.9 is required (Trellis hooks and task.py)"); ok = false }
+  if (run("git", ["--version"]).error) { log.err("git not found"); ok = false }
+  if (needNpx && run("npx", ["--version"]).error) { log.err("npx not found (needed to run the pinned Trellis); install Node/npm or pass --trellis-pkg <path-to-tgz> with a global npx"); ok = false }
+  return ok
+}
+
+/** How to invoke the pinned Trellis: a global `trellis` that already is the pinned version, else `npx -y -p <spec> trellis`. */
+function trellisInvoker() {
+  const pkg = opt("trellis-pkg")
+  if (!pkg) {
+    const g = run("trellis", ["--version"])
+    if (g.status === 0 && g.stdout.trim().split(/\s+/).pop() === TRELLIS_PIN) return { cmd: "trellis", pre: [], label: `global trellis ${TRELLIS_PIN}` }
+  }
+  const spec = pkg ?? `@mindfoldhq/trellis@${TRELLIS_PIN}`
+  return { cmd: "npx", pre: ["-y", "-p", spec, "trellis"], label: `npx -p ${spec}` }
+}
+
+function checkTrellisVersion() {
+  const ver = (readRel(".trellis/.version") ?? "").trim()
+  if (ver === TRELLIS_PIN) return true
+  const msg = ver ? `project Trellis is ${ver}, this trellis-plus targets ${TRELLIS_PIN}` : `.trellis/.version missing — cannot confirm the project is Trellis ${TRELLIS_PIN}`
+  if (flag("allow-version")) { log.warn(`${msg} (continuing: --allow-version)`); return true }
+  log.err(`${msg}. Patch anchors depend on the exact upstream text. Use a matching trellis-plus release, or pass --allow-version to try anyway.`)
+  return false
+}
+
+function cmdInstall() {
+  console.log(`trellis-plus install${DRY ? " (dry-run)" : ""}`)
+  if (!loadToolVersion()) return 2
+  const hasTrellis = exists(".trellis"), hasOpencode = exists(".opencode")
+  const needInit = !hasTrellis || !hasOpencode
+
+  // 1. preflight
+  const user = needInit ? developerName() : ""
+  let ok = toolchainOk(needInit && !opt("trellis-pkg"))
+  if (needInit && !user) { log.err("developer name is required for `trellis init`: pass -u <name> (or set TRELLIS_DEVELOPER, or `git config user.name`)"); ok = false }
+  if (!ok) return 2
+  log.ok(`preflight ok (Trellis pinned to ${TRELLIS_PIN}, trellis-plus ${TOOL_VERSION})`)
+
+  // 2. trellis init (only when needed)
+  if (!needInit) {
+    log.info(".trellis/ and .opencode/ already exist — skipping `trellis init`")
+    if (!checkTrellisVersion()) return 1
+  } else {
+    const inv = trellisInvoker()
+    const args = [...inv.pre, "init", "--opencode", "-u", user, "-y", ...(hasTrellis ? ["--skip-existing"] : [])]
+    const shown = `${inv.cmd} ${args.join(" ")}`
+    if (DRY) {
+      console.log(`  plan: (cd ${shq(ROOT)}) ${shown}`)
+      console.log("  plan: apply --all, then doctor")
+      console.log("\nDry-run: nothing was executed (apply and doctor are only planned: they need the files `trellis init` creates).")
+      return 0
+    }
+    if (!existsSync(ROOT)) mkdirSync(ROOT, { recursive: true })
+    if (flag("git-init") && !gitInfo()) { const g = run("git", ["init"], { cwd: ROOT, stdio: "inherit" }); if (g.status !== 0) { log.err("git init failed"); return 1 } }
+    log.info(`running: ${shown}   [${inv.label}]`)
+    const r = run(inv.cmd, args, { cwd: ROOT, stdio: "inherit" })
+    if (r.error || r.status !== 0) { log.err(`trellis init failed (${r.error ? r.error.message : `exit ${r.status}`}) — nothing was patched`); return 1 }
+    if (!exists(".trellis") || !exists(".opencode")) { log.err("trellis init finished but .trellis/ or .opencode/ is missing — nothing was patched"); return 1 }
+    if (!checkTrellisVersion()) return 1
+  }
+
+  // 3. apply --all
+  console.log("")
+  const a = cmdApply()
+  if (a !== 0) { log.err("apply failed — fix the problems above, then re-run `install` (it is idempotent) or `doctor --fix`"); return a }
+
+  // 4. doctor (the last word)
+  console.log("")
+  const d = cmdDoctor()
+  if (d !== 0) return d
+  if (!gitInfo()) log.warn("not a git repository: the pre-commit hook was skipped (git init, then re-run install, or pass --git-init)")
+  console.log(`\nInstalled: Trellis ${TRELLIS_PIN} + trellis-plus ${TOOL_VERSION}. Restart your OpenCode session.`)
+  return 0
+}
+
+// ───────────── update: upgrade an installed project, keep the user's Trellis traces ─────────────
+
+/** What `update` must never lose. The first five are upstream's own PROTECTED_PATHS (trellis update never touches them); the last
+ *  three are project configuration that `trellis update --force` DOES overwrite (config.yaml is verified: it is rewritten) or that is ours. */
+const PROTECTED = [".trellis/workspace", ".trellis/tasks", ".trellis/spec", ".trellis/.developer", ".trellis/.current-task",
+  ".trellis/config.yaml", ".trellis/plus/plus.config.json", ".trellis/plus/manifest.json"]
+/** Expected to be rewritten by `trellis update --force`: put the user's copy back quietly. Everything else changing is a violation. */
+const RESTORE_QUIETLY = new Set([".trellis/config.yaml"])
+
+const shaBuf = (b) => createHash("sha256").update(b).digest("hex")
+const semver = (v) => String(v).trim().split("-")[0].split(".").map((n) => parseInt(n, 10) || 0)
+const cmpVer = (a, b) => { const x = semver(a), y = semver(b); for (let i = 0; i < 3; i++) { if ((x[i] ?? 0) !== (y[i] ?? 0)) return (x[i] ?? 0) < (y[i] ?? 0) ? -1 : 1 } return 0 }
+
+/** rel path -> sha256 of every file under the protected paths (files and directories). */
+function protectedHashes() {
+  const out = new Map()
+  for (const pp of PROTECTED) {
+    if (!exists(pp)) continue
+    if (statSync(abs(pp)).isDirectory()) for (const f of walk(abs(pp))) out.set(`${pp}/${f}`, shaBuf(readFileSync(abs(`${pp}/${f}`))))
+    else out.set(pp, shaBuf(readFileSync(abs(pp))))
+  }
+  return out
+}
+
+function snapshotProtected(hashes) {
+  const dir = join(abs(P.backup), stamp, "protected")
+  for (const rel of hashes.keys()) { const dst = join(dir, rel); mkdirSync(dirname(dst), { recursive: true }); copyFileSync(abs(rel), dst) }
+  return dir
+}
+
+/** Keep the three newest protected snapshots; older ones are deleted (they are full copies of spec/tasks/workspace). */
+function pruneSnapshots(keep = 3) {
+  const root = abs(P.backup)
+  if (!existsSync(root)) return
+  const stamps = readdirSync(root).filter((d) => existsSync(join(root, d, "protected"))).sort()
+  for (const d of stamps.slice(0, Math.max(0, stamps.length - keep))) rmSync(join(root, d, "protected"), { recursive: true, force: true })
+}
+
+/** Compare against the snapshot; restore anything that changed or vanished. Returns the violations (non-quiet restores). */
+function verifyProtected(before, snapDir) {
+  const violations = []
+  for (const [rel, h] of before) {
+    const cur = exists(rel) ? shaBuf(readFileSync(abs(rel))) : null
+    if (cur === h) continue
+    mkdirSync(dirname(abs(rel)), { recursive: true })
+    copyFileSync(join(snapDir, rel), abs(rel))
+    if (RESTORE_QUIETLY.has(rel)) log.info(`${rel}: Trellis rewrote it, your version was put back`)
+    else violations.push(`${rel} ${cur === null ? "was deleted" : "was modified"} — restored from ${relative(ROOT, snapDir)}`)
+  }
+  return violations
+}
+
+function cmdUpdate() {
+  console.log(`trellis-plus update${DRY ? " (dry-run)" : ""}`)
+  if (!loadToolVersion()) return 2
+  if (!exists(".trellis") || !exists(".opencode")) { log.err(`${ROOT} has no .trellis/ and .opencode/ — nothing to update. Use \`install\` for a new project.`); return 2 }
+  if (!toolchainOk(!opt("trellis-pkg"))) return 2
+
+  // 1. versions: Trellis may only move up to the pinned version (or stay)
+  const projVer = (readRel(".trellis/.version") ?? "").trim()
+  const manifest = loadManifest()
+  const fromPlus = manifest.version ?? "unknown"
+  let migrate = false
+  if (!projVer) {
+    if (!flag("allow-version")) { log.err(".trellis/.version missing — cannot tell which Trellis this project has. Pass --allow-version to update anyway."); return 1 }
+    log.warn(".trellis/.version missing (continuing: --allow-version)")
+  } else if (cmpVer(projVer, TRELLIS_PIN) > 0) {
+    if (!flag("allow-downgrade")) { log.err(`project Trellis is ${projVer}, newer than the ${TRELLIS_PIN} this trellis-plus targets. Use a newer trellis-plus, or pass --allow-downgrade to move the project back to ${TRELLIS_PIN}.`); return 1 }
+    log.warn(`downgrading Trellis ${projVer} -> ${TRELLIS_PIN} (--allow-downgrade)`)
+  } else if (cmpVer(projVer, TRELLIS_PIN) < 0) migrate = true
+  log.ok(`preflight ok (Trellis ${projVer || "?"} -> ${TRELLIS_PIN}, trellis-plus ${fromPlus} -> ${TOOL_VERSION})`)
+
+  const inv = trellisInvoker()
+  const args = [...inv.pre, "update", "--force", ...(migrate ? ["--migrate"] : []), ...(flag("allow-downgrade") ? ["--allow-downgrade"] : [])]
+  const before = protectedHashes()
+  const dirs = PROTECTED.filter(exists)
+  log.info(`protected (kept as they are): ${dirs.join(", ")}  [${before.size} files]`)
+
+  if (DRY) {
+    console.log(`  plan: snapshot the protected files to ${P.backup}/<time>/protected/`)
+    console.log(`  plan: (cd ${shq(ROOT)}) ${inv.cmd} ${args.join(" ")}   [${inv.label}]`)
+    console.log("  plan: verify the protected files, restore any that changed")
+    console.log("  plan: apply with your previous options (everything if none recorded), then doctor")
+    const d = run(inv.cmd, [...inv.pre, "update", "--dry-run"], { cwd: ROOT, encoding: "utf8" })
+    if (d.status === 0) console.log("\n  what `trellis update` would change (read-only preview):\n" + d.stdout.split("\n").map((l) => "    " + l).join("\n"))
+    else log.warn("could not run the read-only `trellis update --dry-run` preview")
+    console.log("\nDry-run: nothing was changed.")
+    return 0
+  }
+
+  // 2. snapshot, update, verify
+  const snapDir = snapshotProtected(before)
+  log.ok(`protected files copied to ${relative(ROOT, snapDir)}`)
+  log.info(`running: ${inv.cmd} ${args.join(" ")}   [${inv.label}]`)
+  const r = run(inv.cmd, args, { cwd: ROOT, stdio: "inherit" })
+  const freshConfig = exists(".trellis/config.yaml") ? readRel(".trellis/config.yaml") : null
+  const violations = verifyProtected(before, snapDir)
+  const failed = r.error || r.status !== 0
+  if (violations.length) { violations.forEach((v) => log.err(`protected: ${v}`)); log.err("trellis update touched files it must not touch — they were restored. Stopping before apply.") ; return 1 }
+  if (failed) { log.err(`trellis update failed (${r.error ? r.error.message : `exit ${r.status}`}). Protected files are intact. Fix the cause and re-run \`update\` (it is safe to repeat), or run \`doctor --fix\`.`); return 1 }
+  if (migrate && freshConfig !== null && freshConfig !== readRel(".trellis/config.yaml")) {
+    writeRel(".trellis/config.yaml.trellis-new", freshConfig)
+    log.warn("Trellis changed versions: its new config.yaml is saved as .trellis/config.yaml.trellis-new — merge any new sections into your config.yaml")
+  }
+  if (!checkTrellisVersion()) return 1
+
+  // 3. apply: previous options (everything when none were recorded), overwriting managed files outside spec/
+  console.log("")
+  const prev = manifest.options ?? {}
+  if (!ALL && !Object.values(prev).some(Boolean)) { ALL = true; log.info("no previous trellis-plus options recorded — applying the full set") }
+  FORCE_MANAGED = true
+  const a = cmdApply()
+  if (a !== 0) { log.err("apply failed — fix the problems above, then re-run `update` or `doctor --fix`"); return a }
+
+  // 4. doctor
+  console.log("")
+  const d = cmdDoctor()
+  if (d !== 0) return d
+  pruneSnapshots()
+  const upstreamBackup = existsSync(abs(".trellis")) ? readdirSync(abs(".trellis")).filter((n) => n.startsWith(".backup-")).sort().pop() : null
+  console.log(`\nUpdated: Trellis ${projVer || "?"} -> ${TRELLIS_PIN}, trellis-plus ${fromPlus} -> ${TOOL_VERSION}. Restart your OpenCode session.`)
+  console.log(`Backups: ${relative(ROOT, snapDir) || snapDir} (your protected files)${upstreamBackup ? `, .trellis/${upstreamBackup}/ (files Trellis overwrote)` : ""}, ${P.backup}/${stamp}/ (files trellis-plus overwrote)`)
+  return 0
+}
+
 function cmdRevert() {
   console.log("trellis-plus revert")
   const m0 = loadManifest()
@@ -560,9 +801,10 @@ const selfRel = () => {
 }
 
 function help() {
-  console.log(readFileSync(fileURLToPath(import.meta.url), "utf8").split("\n").slice(2, 19).join("\n").replace(/^ \* ?/gm, ""))
+  const lines = readFileSync(fileURLToPath(import.meta.url), "utf8").split("\n")
+  console.log(lines.slice(2, lines.findIndex((l, i) => i > 1 && l.trim() === "*/")).join("\n").replace(/^ \* ?/gm, ""))
   return 0
 }
 
-const code = HELP ? help() : ({ apply: cmdApply, doctor: cmdDoctor, revert: cmdRevert, help }[command]?.() ?? (console.error(`unknown command: ${command}`), 2))
+const code = HELP ? help() : ({ install: cmdInstall, update: cmdUpdate, apply: cmdApply, doctor: cmdDoctor, revert: cmdRevert, help }[command]?.() ?? (console.error(`unknown command: ${command}`), 2))
 process.exit(code)

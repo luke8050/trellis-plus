@@ -1665,6 +1665,166 @@ check "parent lint-plan: design/implement live in the children" 0 "parent task w
 check "matrix on the parent prints the whole family" 0 "\| R2 \| .*OrderController" $G matrix "$PT"
 fi
 
+if want Q; then
+echo "== Q. install: pinned Trellis init + apply --all + doctor (fake trellis / npx, no network)"
+QPATH="$HERE/fake-trellis:$PATH"
+QLOG="$WORK/q.log"
+export FAKE_TRELLIS_BASE="$BASE"
+qi() { env PATH="$QPATH" FAKE_TRELLIS_LOG="$QLOG" "$@"; }       # run with the fake trellis/npx first on PATH
+INST="node $TOOL/trellis-plus.mjs install"
+
+# --- dry-run plans only
+QD="$WORK/q-dry"; mkdir -p "$QD"; : > "$QLOG"
+check "dry-run on an empty dir prints the init plan" 0 "plan: .*init --opencode -u luke -y" qi $INST "$QD" -u luke --dry-run
+[ -z "$(ls -A "$QD")" ] && ok "dry-run creates nothing" || bad "dry-run creates nothing"
+grep -q " init" "$QLOG" && { bad "dry-run never runs init (the read-only --version probe is fine)"; cat "$QLOG"; } || ok "dry-run never runs init (the read-only --version probe is fine)"
+
+# --- no developer name: refused with a clear message (HOME without git config, no env)
+QN="$WORK/q-noname"; mkdir -p "$QN"; mkdir -p "$WORK/nohome"
+check "no developer name -> exit 2 with the hint" 2 "developer name is required" env -u TRELLIS_DEVELOPER HOME="$WORK/nohome" GIT_CONFIG_NOSYSTEM=1 PATH="$QPATH" $INST "$QN"
+check "...the same call with -u works" 0 "Installed: Trellis 0.6.17" qi $INST "$QN" -u luke
+
+# --- fresh project via the (pinned) global trellis; -u before and after the path
+QF="$WORK/q-fresh"; mkdir -p "$QF"; : > "$QLOG"
+check "install on an empty dir: init + apply --all + doctor" 0 "Installed: Trellis 0.6.17 \+ trellis-plus 3\.0\.0" qi $INST -u luke "$QF"
+has "...the project path is the directory, not the -u value" "project: $QF "
+grep -q "init --opencode -u luke -y" "$QLOG" && ok "init got --opencode -u luke -y" || { bad "init got --opencode -u luke -y"; cat "$QLOG"; }
+grep -q "^npx" "$QLOG" && bad "pinned global trellis is used, npx is not" || ok "pinned global trellis is used, npx is not"
+for f in .trellis/plus/gate.mjs .opencode/agents/plus-design-reviewer.md; do [ -f "$QF/$f" ] && ok "installed $f" || bad "installed $f"; done
+grep -q "trellis-plus" "$QF/.trellis/scripts/task.py" && ok "task.py hard gate patched (--all)" || bad "task.py hard gate patched (--all)"
+check "doctor agrees after install" 0 "everything in place" node "$TOOL/trellis-plus.mjs" doctor "$QF"
+check "install again is idempotent" 0 "0 created, 0 updated" qi $INST "$QF"
+[ "$(grep -c '^trellis init' "$QLOG")" = 1 ] && ok "second install did not run init again" || bad "second install did not run init again"
+check "no git repo: warns that the hook was skipped" 0 "pre-commit hook was skipped" qi $INST "$QF"
+QG="$WORK/q-git"; mkdir -p "$QG"
+check "--git-init creates the repo so the hook is installed" 0 "Installed" qi $INST "$QG" -u luke --git-init
+[ -x "$QG/.git/hooks/pre-commit" ] && ok "pre-commit hook exists after --git-init" || bad "pre-commit hook exists after --git-init"
+
+# --- init failure: nothing patched
+QX="$WORK/q-fail"; mkdir -p "$QX"
+check "init failure -> exit 1, says nothing was patched" 1 "trellis init failed .*nothing was patched" qi env FAKE_TRELLIS_FAIL=1 $INST "$QX" -u luke
+[ ! -e "$QX/.trellis/plus" ] && ok "failed init leaves no trellis-plus files" || bad "failed init leaves no trellis-plus files"
+
+# --- a global trellis of another version is NOT used: npx with the pinned spec (or --trellis-pkg)
+QV="$WORK/q-npx"; mkdir -p "$QV"; : > "$QLOG"
+check "global trellis 0.6.16 -> falls back to npx" 0 "Installed" qi env FAKE_TRELLIS_VERSION=0.6.16 $INST "$QV" -u luke
+grep -q "^npx -y -p @mindfoldhq/trellis@0.6.17 trellis init" "$QLOG" && ok "npx is pinned to @mindfoldhq/trellis@0.6.17" || { bad "npx is pinned to @mindfoldhq/trellis@0.6.17"; cat "$QLOG"; }
+QT="$WORK/q-tgz"; mkdir -p "$QT"; : > "$QLOG"
+check "--trellis-pkg <tgz> (offline/intranet) is honoured even when a global trellis matches" 0 "Installed" qi $INST "$QT" -u luke --trellis-pkg ./mindfoldhq-trellis-0.6.17.tgz
+grep -q "^npx -y -p ./mindfoldhq-trellis-0.6.17.tgz trellis init" "$QLOG" && ok "npx got the tarball spec" || { bad "npx got the tarball spec"; cat "$QLOG"; }
+
+# --- existing project: init is skipped, the version is enforced
+QE="$WORK/q-exist"; fresh "$QE"; : > "$QLOG"
+check "existing .trellis/.opencode: init skipped" 0 "skipping .trellis init." qi $INST "$QE"
+[ ! -s "$QLOG" ] && ok "...and trellis was not called" || { bad "...and trellis was not called"; cat "$QLOG"; }
+QM="$WORK/q-mismatch"; fresh "$QM"; echo "0.6.18" > "$QM/.trellis/.version"
+check "project on Trellis 0.6.18 -> refused" 1 "project Trellis is 0.6.18, this trellis-plus targets 0.6.17" qi $INST "$QM"
+[ ! -e "$QM/.trellis/plus" ] && ok "...and nothing was patched" || bad "...and nothing was patched"
+check "--allow-version overrides (control for the refusal above)" 0 "continuing: --allow-version" qi $INST "$QM" --allow-version
+[ "$(qi $INST "$QM" --allow-version 2>&1 | grep -c 'is tested with Trellis')" = 1 ] && ok "version warning printed once, not per step" || bad "version warning printed once, not per step"
+QU="$WORK/q-nover"; fresh "$QU"; rm -f "$QU/.trellis/.version"
+check "missing .trellis/.version -> refused" 1 "\.trellis/\.version missing" qi $INST "$QU"
+fi
+
+if want R; then
+echo "== R. update: pinned trellis update --force + apply + doctor, user traces kept (fake trellis)"
+RPATH="$HERE/fake-trellis:$PATH"; RLOG="$WORK/r.log"; export FAKE_TRELLIS_BASE="$BASE"
+ri() { env PATH="$RPATH" FAKE_TRELLIS_LOG="$RLOG" "$@"; }
+UPD="node $TOOL/trellis-plus.mjs update"
+# the user-owned part of a project (what update must keep byte for byte)
+mine() { ( cd "$1" && find .trellis/spec .trellis/tasks .trellis/workspace .trellis/.developer .trellis/config.yaml .trellis/plus/plus.config.json -type f 2>/dev/null | grep -v '\.plus-new$' | sort | xargs sha256sum ); }
+# a project with trellis-plus applied (--all) and some "usage traces"
+mkuse() { mkproj "$1"
+  mkdir -p "$1/.trellis/workspace/luke" "$1/.trellis/tasks/11-14-demo" "$1/.trellis/spec/backend"
+  echo "my backend rule" > "$1/.trellis/spec/backend/my-rules.md"; echo "journal" > "$1/.trellis/workspace/luke/journal-1.md"
+  echo "task notes" > "$1/.trellis/tasks/11-14-demo/notes.md"; echo luke > "$1/.trellis/.developer"
+  echo "# MY CUSTOM SETTING" >> "$1/.trellis/config.yaml"
+  python3 - "$1/.trellis/plus/plus.config.json" <<'PY'
+import json, sys
+f = sys.argv[1]; d = json.load(open(f)); d["__mine"] = True; json.dump(d, open(f, "w"), indent=2)
+PY
+}
+
+# --- not an installed project
+RN="$WORK/r-none"; mkdir -p "$RN"
+check "update on a dir without .trellis -> exit 2, points to install" 2 "nothing to update. Use .install." ri $UPD "$RN"
+
+# --- dry-run changes nothing and never runs update --force
+RD="$WORK/r-dry"; mkuse "$RD"; snap "$RD" > "$WORK/rd1"; mine "$RD" > "$WORK/rd-mine1"; : > "$RLOG"
+check "dry-run prints the plan and the protected set" 0 "protected \(kept as they are\): .*\.trellis/spec" ri $UPD "$RD" --dry-run
+has "...including config.yaml" "\.trellis/config\.yaml"
+has "...and the read-only trellis preview" "dry-run preview"
+snap "$RD" > "$WORK/rd2"; cmp -s "$WORK/rd1" "$WORK/rd2" && ok "dry-run changed no file" || bad "dry-run changed no file"
+grep -q "update --force" "$RLOG" && bad "dry-run never runs update --force" || ok "dry-run never runs update --force"
+
+# --- happy path: traces kept byte for byte, managed files overwritten, patches back
+RU="$WORK/r-up"; mkuse "$RU"; mine "$RU" > "$WORK/ru-before"; : > "$RLOG"
+echo "// local edit" >> "$RU/.trellis/plus/gate.mjs"                  # plus-managed, outside spec/: may be overwritten
+echo "my edit" >> "$RU/.trellis/spec/guides/plus-testing-guide.md"    # plus-managed, INSIDE spec/: must be kept
+mine "$RU" > "$WORK/ru-before"
+check "update: exit 0 and the from -> to line" 0 "Updated: Trellis 0.6.17 -> 0.6.17, trellis-plus .* -> 3\.0\.0" ri $UPD "$RU"
+mine "$RU" > "$WORK/ru-after"
+cmp -s "$WORK/ru-before" "$WORK/ru-after" && ok "spec/ tasks/ workspace/ .developer config.yaml plus.config.json are byte-identical" || { bad "protected files are byte-identical"; diff "$WORK/ru-before" "$WORK/ru-after" | head -5; }
+has "config.yaml: the rewrite by trellis was undone" "config\.yaml: Trellis rewrote it, your version was put back"
+grep -q "update --force" "$RLOG" && ok "trellis update ran with --force" || bad "trellis update ran with --force"
+grep -q -- "--migrate" "$RLOG" && bad "no --migrate when the version does not change" || ok "no --migrate when the version does not change"
+grep -q "local edit" "$RU/.trellis/plus/gate.mjs" && bad "gate.mjs local edit overwritten" || ok "gate.mjs local edit overwritten (managed file outside spec/)"
+has "...and said so" "updated \.trellis/plus/gate\.mjs \(overwrote local edits, backup kept\)"
+grep -q "my edit" "$RU/.trellis/spec/guides/plus-testing-guide.md" && ok "plus guide edited inside spec/ is kept" || bad "plus guide edited inside spec/ is kept"
+[ -f "$RU/.trellis/spec/guides/plus-testing-guide.md.plus-new" ] && ok "...with the new version next to it (.plus-new)" || bad "...with the new version next to it (.plus-new)"
+check "doctor accepts the kept edit (warn, not a failure)" 0 "your local edit is kept" node "$TOOL/trellis-plus.mjs" doctor "$RU"
+{ grep -q "trellis-plus" "$RU/.trellis/scripts/task.py" && ! cmp -s "$BASE/.trellis/scripts/task.py" "$RU/.trellis/scripts/task.py"; } && ok "hard gate patch is back in task.py" || bad "hard gate patch is back in task.py"
+[ -x "$RU/.git/hooks/pre-commit" ] && ok "pre-commit hook still installed" || bad "pre-commit hook still installed"
+ls -d "$RU"/.trellis/plus/backup/*/protected >/dev/null 2>&1 && ok "protected files were copied to .trellis/plus/backup/<time>/protected" || bad "protected snapshot exists"
+
+# --- a violation by trellis (modifies / deletes protected files) is undone and stops before apply
+RV="$WORK/r-viol"; mkuse "$RV"; mine "$RV" > "$WORK/rv-before"
+check "trellis modifies a spec file -> exit 1, restored" 1 "protected: \.trellis/spec/backend/my-rules\.md was modified" ri env FAKE_TRELLIS_TOUCH=.trellis/spec/backend/my-rules.md $UPD "$RV"
+[ "$(cat "$RV/.trellis/spec/backend/my-rules.md")" = "my backend rule" ] && ok "...the file has its content back" || bad "...the file has its content back"
+hasnt "...and apply did not run after the violation" "trellis-plus apply"
+check "trellis deletes a task file -> exit 1, restored" 1 "protected: \.trellis/tasks/11-14-demo/notes\.md was deleted" ri env FAKE_TRELLIS_DELETE=.trellis/tasks/11-14-demo/notes.md $UPD "$RV"
+[ -f "$RV/.trellis/tasks/11-14-demo/notes.md" ] && ok "...the deleted task file is back" || bad "...the deleted task file is back"
+mine "$RV" > "$WORK/rv-after"; cmp -s "$WORK/rv-before" "$WORK/rv-after" && ok "after both violations everything protected is identical" || bad "after both violations everything protected is identical"
+
+# --- trellis update fails
+RF="$WORK/r-fail"; mkuse "$RF"; mine "$RF" > "$WORK/rf-before"
+check "trellis update failure -> exit 1, protected intact, says how to continue" 1 "trellis update failed .*Protected files are intact" ri env FAKE_TRELLIS_FAIL_UPDATE=1 $UPD "$RF"
+mine "$RF" > "$WORK/rf-after"; cmp -s "$WORK/rf-before" "$WORK/rf-after" && ok "...nothing protected changed" || bad "...nothing protected changed"
+
+# --- versions
+RW="$WORK/r-ver"; mkuse "$RW"; echo "0.6.18" > "$RW/.trellis/.version"
+check "project newer than the pin -> refused" 1 "newer than the 0\.6\.17 this trellis-plus targets" ri $UPD "$RW"
+: > "$RLOG"; check "--allow-downgrade moves it back to the pin" 0 "downgrading Trellis 0\.6\.18 -> 0\.6\.17" ri $UPD "$RW" --allow-downgrade
+grep -q -- "--allow-downgrade" "$RLOG" && ok "...and passes --allow-downgrade to trellis update" || bad "...and passes --allow-downgrade to trellis update"
+RO="$WORK/r-old"; mkuse "$RO"; echo "0.6.16" > "$RO/.trellis/.version"; : > "$RLOG"
+check "project older than the pin -> upgraded" 0 "Updated: Trellis 0\.6\.16 -> 0\.6\.17" ri $UPD "$RO"
+grep -q "update --force --migrate" "$RLOG" && ok "upgrade passes --migrate" || { bad "upgrade passes --migrate"; cat "$RLOG"; }
+[ -f "$RO/.trellis/config.yaml.trellis-new" ] && ok "version change: trellis's new config.yaml saved as config.yaml.trellis-new" || bad "version change: config.yaml.trellis-new"
+grep -q "MY CUSTOM SETTING" "$RO/.trellis/config.yaml" && ok "...while your config.yaml is kept" || bad "...while your config.yaml is kept"
+RM="$WORK/r-nover"; mkuse "$RM"; rm -f "$RM/.trellis/.version"
+check "missing .trellis/.version -> refused" 1 "\.trellis/\.version missing" ri $UPD "$RM"
+check "...--allow-version overrides" 0 "Updated:" ri $UPD "$RM" --allow-version
+
+# --- options: the previous ones are kept; no record -> the full set
+RP="$WORK/r-prev"; fresh "$RP"; node "$TOOL/trellis-plus.mjs" apply "$RP" --hard-gate >/dev/null 2>&1
+check "update re-applies only the previously chosen options" 0 "Updated:" ri $UPD "$RP"
+[ ! -f "$RP/.git/hooks/pre-commit" ] && ok "git hook was not enabled before, still not" || bad "git hook was not enabled before, still not"
+cmp -s "$BASE/.opencode/agents/trellis-check.md" "$RP/.opencode/agents/trellis-check.md" && ok "agent prompts untouched (not enabled before)" || bad "agent prompts untouched (not enabled before)"
+RQ="$WORK/r-nomani"; fresh "$RQ"
+check "no manifest -> applies the full set" 0 "no previous trellis-plus options recorded" ri $UPD "$RQ"
+[ -x "$RQ/.git/hooks/pre-commit" ] && ok "...hook installed" || bad "...hook installed"
+
+# --- offline: --trellis-pkg goes to npx
+RK="$WORK/r-pkg"; mkuse "$RK"; : > "$RLOG"
+check "--trellis-pkg <tgz> is used for the update" 0 "Updated:" ri $UPD "$RK" --trellis-pkg ./mindfoldhq-trellis-0.6.17.tgz
+grep -q "^npx -y -p ./mindfoldhq-trellis-0.6.17.tgz trellis update" "$RLOG" && ok "npx got the tarball spec" || { bad "npx got the tarball spec"; cat "$RLOG"; }
+
+# --- snapshots do not pile up: only the 3 newest are kept
+RS="$WORK/r-prune"; mkuse "$RS"
+for i in 1 2 3 4 5; do ri $UPD "$RS" >/dev/null 2>&1; done
+[ "$(ls -d "$RS"/.trellis/plus/backup/*/protected 2>/dev/null | wc -l)" = 3 ] && ok "after 5 updates only 3 protected snapshots remain" || bad "after 5 updates only 3 protected snapshots remain ($(ls -d "$RS"/.trellis/plus/backup/*/protected 2>/dev/null | wc -l))"
+fi
+
 echo
 echo "================ passed: $PASS   failed: $FAIL   skipped: $SKIP   (workdir: $WORK)"
 exit $FAIL

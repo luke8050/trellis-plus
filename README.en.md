@@ -7,7 +7,7 @@
 [![npm](https://img.shields.io/npm/v/@luke8050/trellis-plus?color=blue)](https://www.npmjs.com/package/@luke8050/trellis-plus)
 [![node](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
 [![license](https://img.shields.io/badge/license-MIT-blue)](#license)
-[![tests](https://img.shields.io/badge/regression-715%20assertions-success)](./trellis-plus/test-harness)
+[![tests](https://img.shields.io/badge/regression-728%20assertions-success)](./trellis-plus/test-harness)
 
 **Trellis** (`trellis init`, OpenCode platform) owns the task → plan → implement → check → commit skeleton. trellis-plus adds four things on top of it, at almost no token cost — every check is a Node script running locally, no model call involved.
 
@@ -88,16 +88,18 @@ npx @luke8050/trellis-plus@latest update <project>
 npx @luke8050/trellis-plus@latest update <project> --dry-run   # the plan plus trellis's own change preview
 ```
 
-`update` runs: (1) preflight → (2) copy the protected files to `.trellis/plus/backup/<time>/protected/` → (3) the pinned `trellis update --force` (plus `--migrate` when the project's Trellis is older) → (4) verify the protected files, restore any that changed or vanished → (5) re-`apply` with your **previous options** (`--all` if none recorded) → (6) `doctor`.
+`update` runs: (1) preflight → (2) copy the protected files to `.trellis/plus/backup/<time>/protected/` → (3) the pinned `trellis update --force` (plus `--migrate` when the project's Trellis is older) → (4) verify the protected files, restore changed/deleted ones and remove added ones → (5) re-`apply` with your **previous options** (`--all` if none recorded) → (6) `doctor`.
 
 | | What |
 |---|---|
-| **Kept byte for byte** | `.trellis/spec/`, `.trellis/tasks/`, `.trellis/workspace/`, `.trellis/.developer`, `.trellis/.current-task` (upstream protects these five itself); plus `.trellis/config.yaml` (`trellis update --force` rewrites it — verified against real 0.6.17 — so `update` checks and restores it) and `.trellis/plus/plus.config.json` |
+| **Kept byte for byte** | `.trellis/spec/`, `.trellis/tasks/`, `.trellis/workspace/`, `.trellis/.developer`, `.trellis/.current-task` (upstream protects these five itself); plus `.trellis/config.yaml` (`trellis update --force` rewrites it — verified against real 0.6.17 — so `update` checks and restores it) |
 | **Overwritten** | the other Trellis-managed files (`.trellis/scripts/`, `agents/`, `workflow.md`, the agents / lib under `.opencode/`) and trellis-plus's own files (`.trellis/plus/gate.mjs`, templates, `plus-*` skills / agents). Files you added that Trellis does not manage are left alone |
 | **Exception** | trellis-plus guides that live inside `.trellis/spec/` (`plus-testing-guide.md`, …): kept if you edited them, the new version goes to `*.plus-new` |
-| **Backups** | `.trellis/plus/backup/<time>/` (files trellis-plus overwrote, and a full copy of the protected files — the 3 newest are kept), `.trellis/.backup-<time>/` (files Trellis overwrote) |
+| **Backups** | `.trellis/plus/backup/<time>/` (files trellis-plus overwrote, and a full copy of the protected files; the 3 newest protected snapshots are kept and older backup directories are cleaned up), `.trellis/.backup-<time>/` (files Trellis overwrote) |
 
-A project whose Trellis is newer than 0.6.17 is refused (`--allow-downgrade` moves it back). When Trellis itself changes version, its new `config.yaml` is saved as `.trellis/config.yaml.trellis-new` for you to merge. Options as for `install`: `--dry-run`, `--allow-version`, `--trellis-pkg <spec>`.
+`.trellis/plus/plus.config.json` is kept too, but `apply` updates its `version` key to the current tool version (every other key and the layout are left as they are).
+
+A project whose Trellis is newer than 0.6.17 is refused (`--allow-downgrade` moves it back). When Trellis itself changes version (upgrade, or downgrade with `--allow-downgrade`), its new `config.yaml` is saved as `.trellis/config.yaml.trellis-new` for you to merge. Options as for `install`: `--dry-run`, `--allow-version`, `--trellis-pkg <spec>`.
 
 **Step by step** (project already initialised with `trellis init --opencode`):
 
@@ -224,8 +226,8 @@ TRELLIS_DEVELOPER=<any-name> BASE=../trellis-opencode bash test-harness/run-regr
 - bash is required; the exit code equals the number of failed assertions.
 - The suite uses a fake `ocr`, a fake `mvn` and fixtures throughout — no network.
 - Every gate rule has a positive case, a negative case and a **reverse control**: the rule's logic is temporarily broken and the very same assertion must fail. A rule that survives its own mutation means the test is fake.
-- Result (Linux / GNU coreutils): **715 passed / 0 failed / 1 skipped** (the skipped one is the v1.1 → v2 upgrade case, which needs `V11_TOOL`).
-- Measured on macOS: 626 / 3 / 1. The failures come from BSD tooling differences (`touch -d 'now + 30 seconds'` is unsupported, and differing mtime granularity makes an OCR staleness case flaky), not from gate logic.
+- Result (Linux / GNU coreutils): **728 passed / 0 failed / 1 skipped** (the skipped one is the v1.1 → v2 upgrade case, which needs `V11_TOOL`).
+- macOS/BSD works too (`sed -i` / `touch -d` were replaced with portable calls): **728 passed / 0 failed / 1 skipped** measured there.
 
 To release a new version, change `version` in `package.json` and nothing else — the installer reads it from there and writes it into each project's `plus.config.json`; there is no second hard-coded version in the repository.
 

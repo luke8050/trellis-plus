@@ -1,5 +1,5 @@
 #!/bin/bash
-# Regression suite for trellis-plus v2.
+# Regression suite for trellis-plus v3.
 #
 # usage:  BASE=/path/to/unzipped/trellis-project  bash test-harness/run-regression.sh
 #   BASE     a project produced by `trellis init --opencode` (Trellis 0.6.17 was used); required
@@ -44,6 +44,8 @@ chk() { local want="$1" pat="$2"; shift 2; local out; out="$("$@" 2>&1)"; local 
   [ "$rc" -eq "$want" ] && { [ "$pat" = "-" ] || echo "$out" | grep -qE -- "$pat"; }; }
 want() { [ -z "$ONLY" ] || [[ ",$ONLY," == *",$1,"* ]]; }
 
+# sedi <sed-args...>: in-place sed that works on both BSD (macOS, needs an empty backup suffix) and GNU sed
+sedi() { if sed --version >/dev/null 2>&1; then sed -i "$@"; else sed -i '' "$@"; fi; }
 # edit <file> <old> <new> [count]: exact replacement; the anchor must occur exactly <count> (default 1) times
 edit() { F="$1" OLD="$2" NEW="$3" CNT="${4:-1}" python3 - <<'PY' || bad "edit: anchor not found exactly ${4:-1}x in $1: ${2:0:60}"
 import os, sys
@@ -138,6 +140,10 @@ open(f, "w", encoding="utf8").write(s[:a] + s[b:])
 PY
 }
 
+# tool version from package.json, available to every selected group
+tv() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]+"/package.json"))["version"])' "$1"; }
+TV="$(tv "$TOOL")"
+
 echo "regression workdir: $WORK"
 
 ############################################################################################################
@@ -152,9 +158,6 @@ snap "$W1" > "$WORK/s1"; run node "$TOOL/trellis-plus.mjs" apply "$W1" --all; sn
 cmp -s "$WORK/s1" "$WORK/s2" && ok "apply is idempotent" || bad "apply is idempotent"
 run node "$TOOL/trellis-plus.mjs" doctor "$W1";                exit_is "doctor passes after apply" 0
 cfgver() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("version"))' "$1/.trellis/plus/plus.config.json"; }
-# tv <tool dir>: the version in that tool's package.json (the single source of the tool version)
-tv() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]+"/package.json"))["version"])' "$1"; }
-TV="$(tv "$TOOL")"
 [ "$(cfgver "$W1")" = "$TV" ] && ok "a fresh apply leaves plus.config.json with the package.json version ($TV)" || bad "a fresh apply leaves plus.config.json with the package.json version ($TV; got $(cfgver "$W1"))"
 cp "$W1/.trellis/plus/plus.config.json" "$WORK/a.ver.cfg"
 python3 - "$W1/.trellis/plus/plus.config.json" <<'PY2'
@@ -165,7 +168,7 @@ run node "$TOOL/trellis-plus.mjs" doctor "$W1"; exit_is "doctor flags a plus.con
 run node "$TOOL/trellis-plus.mjs" apply "$W1" --all; exit_is "apply stamps the missing version" 0
 [ "$(cfgver "$W1")" = "$TV" ] && ok "...version is $TV again" || bad "...version is $TV again"
 [ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["ocr"]["maxRerun"])' "$W1/.trellis/plus/plus.config.json")" = "1" ] && ok "...and the user's own keys are untouched (ocr.maxRerun stays 1)" || bad "...and the user's own keys are untouched"
-sed -i "s/\"version\": \"$TV\"/\"version\": \"2.0.0\"/" "$W1/.trellis/plus/plus.config.json"
+sedi "s/\"version\": \"$TV\"/\"version\": \"2.0.0\"/" "$W1/.trellis/plus/plus.config.json"
 run node "$TOOL/trellis-plus.mjs" doctor "$W1"; exit_is "doctor flags an older version" 1; has "...naming both versions" "version is \"2.0.0\", this tool is $TV"
 run node "$TOOL/trellis-plus.mjs" apply "$W1" --all; [ "$(cfgver "$W1")" = "$TV" ] && ok "apply upgrades 2.0.0 -> $TV" || bad "apply upgrades 2.0.0 -> $TV"
 cp "$WORK/a.ver.cfg" "$W1/.trellis/plus/plus.config.json"
@@ -782,17 +785,17 @@ check "answering a blocker twice only warns" 0 "WARN  design-review-resolution.m
 report 1 1 1 "$ROWS2"; resolution "- #1 采纳 — 已在 5.1 增加查重步骤" "- #2 采纳 — 已补充 409 说明"
 check "header 阻塞：1 but 2 blocker rows → inconsistent, fails" 1 "header says 阻塞：1 but the 问题清单 table has 2 blocker row" $G design-review "$T"
 reverse "header must match the table" 1 'if (blockers !== null && blockRows.length !== blockers)' 'if (false)' chk 1 "header says" $G design-review "$T"
-report 1 2 1 "$ROWS2"; sed -i '/^阻塞：/d' "$R/design-review.md"
+report 1 2 1 "$ROWS2"; sedi '/^阻塞：/d' "$R/design-review.md"
 check "missing header line 阻塞 fails" 1 '阻塞：N" missing' $G design-review "$T"
 reverse "header 阻塞 required" 1 'if (blockers === null) rep.error(' 'if (false) rep.error(' chk 1 '阻塞：N" missing' $G design-review "$T"
-report 1 2 1 "$ROWS2"; sed -i '/^需人工确认：/d' "$R/design-review.md"
+report 1 2 1 "$ROWS2"; sedi '/^需人工确认：/d' "$R/design-review.md"
 check "missing header line 需人工确认 fails" 1 '需人工确认：M" missing' $G design-review "$T"
 report 3 2 1 "$ROWS2"; resolution "- #1 采纳 — 已在 5.1 增加查重步骤" "- #2 采纳 — 已补充 409 说明"
 check "round 3 only warns (human decides)" 0 "WARN  round 3 exceeds review.maxRounds=2" $G design-review "$T"
 reverse "round limit warning" 1 'if (round !== null && round > cfg.review.maxRounds)' 'if (false)' chk 0 "round 3 exceeds" $G design-review "$T"
 report 1 2 3 "$ROWS2"
 check "3+ items for a human → suggests /plus-grill-design" 0 "consider /plus-grill-design" $G design-review "$T"
-report 1 2 1 "$ROWS2"; touch -d "now + 30 seconds" "$W/$T/design.md"
+report 1 2 1 "$ROWS2"; python3 -c 'import os,sys,time; t=time.time()+30; os.utime(sys.argv[1], (t,t))' "$W/$T/design.md"
 check "editing design.md after the review only warns" 0 "WARN  design.md changed after the review was written" $G design-review "$T"
 reverse "stale-document warning" 1 'if (later.length) rep.warn(' 'if (false) rep.warn(' chk 0 "changed after the review" $G design-review "$T"
 touch "$W/$T/design.md"
@@ -882,7 +885,7 @@ package com.acme;
 import org.junit.jupiter.api.Test;
 class OrderControllerTest { @Test void post_ok() {} }
 X
-sed -i 's/void helperOnly() {}/@org.junit.jupiter.api.Test void left_ok() {}/' src/test/java/com/acme/StockServiceTest.java
+sedi 's/void helperOnly() {}/@org.junit.jupiter.api.Test void left_ok() {}/' src/test/java/com/acme/StockServiceTest.java
 check "after adding the missing tests the gate passes" 0 "✓ PASS" $G test --task "$T"
 # staged mode: nothing staged → nothing to check; staged → checked
 git add -A >/dev/null 2>&1; git reset -q src/test/java/com/acme/OrderControllerTest.java
@@ -930,7 +933,7 @@ import org.junit.jupiter.api.Test;
 class ShipServiceTest { @Test void pack_ok() { new ShipService().pack("a"); } }
 X
 git add -A >/dev/null 2>&1; git -c user.email=a@b -c user.name=t commit -qm ship --no-verify >/dev/null 2>&1
-sed -i 's/return n + 1;/return n + 2;/' src/main/java/com/acme/ShipService.java; echo "// t" >> src/test/java/com/acme/ShipServiceTest.java
+sedi 's/return n + 1;/return n + 2;/' src/main/java/com/acme/ShipService.java; echo "// t" >> src/test/java/com/acme/ShipServiceTest.java
 meth_warn() { local o; o="$($G test --task "$T" 2>&1)"; local rc=$?; [ $rc -eq 0 ] && echo "$o" | grep -q "changed method(s) never referenced by ShipServiceTest.java: send"; }
 check "method-level: a changed method the test never references only warns (default)" 0 "changed method\(s\) never referenced by ShipServiceTest.java: send" $G test --task "$T"
 reverse "method-level detection" 1 'if (missing.length) {' 'if (false) {' chk 0 "never referenced by ShipServiceTest.java: send" $G test --task "$T"
@@ -950,7 +953,7 @@ no_meth() { local o; o="$($G test --task "$T" 2>&1)"; local rc=$?; [ $rc -eq 0 ]
 chk 0 - no_meth && ok "methodLevel=off: no method-level finding" || bad "methodLevel=off: no method-level finding"
 reverse "methodLevel=off" 1 'if (tg.methodLevel !== "off" &&' 'if (true &&' chk 0 - no_meth
 cp "$WORK/i.cfg" .trellis/plus/plus.config.json
-sed -i 's/return n + 2;/return n + 1;/' src/main/java/com/acme/ShipService.java; sed -i 's/return 0;/return 1;/' src/main/java/com/acme/ShipService.java
+sedi 's/return n + 2;/return n + 1;/' src/main/java/com/acme/ShipService.java; sedi 's/return 0;/return 1;/' src/main/java/com/acme/ShipService.java
 no_meth2() { local o; o="$($G test --task "$T" 2>&1)"; local rc=$?; [ $rc -eq 0 ] && ! echo "$o" | grep -q "never referenced"; }
 check "a changed PRIVATE method is not demanded in the test" 0 "ok  src/main/java/com/acme/ShipService.java" $G test --task "$T"
 chk 0 - no_meth2 && ok "...and produces no method-level warning" || bad "...and produces no method-level warning"
@@ -960,8 +963,8 @@ printf 'package com.acme;\npublic class NewService {\n    public int a() {\n    
 printf 'package com.acme;\nimport org.junit.jupiter.api.Test;\nclass NewServiceTest { @Test void a_ok() { new NewService().a(); } }\n' > src/test/java/com/acme/NewServiceTest.java
 check "a NEW Service: every public method must be referenced" 0 "never referenced by NewServiceTest.java: b" $G test --task "$T"
 rm -f src/main/java/com/acme/NewService.java src/test/java/com/acme/NewServiceTest.java
-echo "// c" >> src/main/java/com/acme/OrderController.java; sed -i 's#// t#// t2#' src/test/java/com/acme/OrderControllerTest.java; echo "// t" >> src/test/java/com/acme/OrderControllerTest.java
-sed -i 's/class OrderController { public Long post(String no) { return 1L; } }/class OrderController {\n    public Long post(String no) {\n        return 2L;\n    }\n}/' src/main/java/com/acme/OrderController.java
+echo "// c" >> src/main/java/com/acme/OrderController.java; sedi 's#// t#// t2#' src/test/java/com/acme/OrderControllerTest.java; echo "// t" >> src/test/java/com/acme/OrderControllerTest.java
+sedi 's/class OrderController { public Long post(String no) { return 1L; } }/class OrderController {\n    public Long post(String no) {\n        return 2L;\n    }\n}/' src/main/java/com/acme/OrderController.java
 no_ctl() { local o; o="$($G test --task "$T" 2>&1)"; ! echo "$o" | grep -q "never referenced by OrderControllerTest"; }
 chk 0 - no_ctl && ok "Controllers are checked by file only (no method-level finding)" || bad "Controllers are checked by file only"
 reverse "controllers are exempt from the method-level check" 1 '!/Controller$/.test(basename(f, ".java"))' 'true' chk 0 - no_ctl
@@ -978,7 +981,7 @@ check "tier M + 1 changed Service with a test passes" 0 "ok  src/main/java/com/a
 git checkout -q -- .
 for n in A B C D; do printf 'package com.acme;\npublic class %sService {\n    public int f() {\n        return 1;\n    }\n}\n' $n > src/main/java/com/acme/${n}Service.java; printf 'package com.acme;\nimport org.junit.jupiter.api.Test;\nclass %sServiceTest { @Test void f_ok() { new %sService().f(); } }\n' $n $n > src/test/java/com/acme/${n}ServiceTest.java; done
 git add -A >/dev/null 2>&1; git -c user.email=a@b -c user.name=t commit -qm four --no-verify >/dev/null 2>&1
-for n in A B C D; do sed -i 's/return 1;/return 2;/' src/main/java/com/acme/${n}Service.java; echo "// t" >> src/test/java/com/acme/${n}ServiceTest.java; done
+for n in A B C D; do sedi 's/return 1;/return 2;/' src/main/java/com/acme/${n}Service.java; echo "// t" >> src/test/java/com/acme/${n}ServiceTest.java; done
 check "tier M + 4 changed Services fails" 1 "tier M allows at most 3 Service/Controller classes in one module; this change has 4" $G test --task "$TMt"
 reverse "tier M class limit in the test gate" 1 'if (concrete.length > cfg.tiers.maxClassesM || mods.size > 1) rep.error(' 'if (false) rep.error(' chk 1 "tier M allows at most 3" $G test --task "$TMt"
 TLt="$(newtask "$W" tgl)"; $G tier "$TLt" L >/dev/null
@@ -1025,7 +1028,7 @@ reverse "module grouping" 1 'const mod = moduleOf(f)' 'const mod = ""' chk 0 - c
 reverse "-pl command per module" 1 'const tpl = mod ? cfg.testGate.runCommand.replace("{module}", mod) : cfg.testGate.runCommandRoot' 'const tpl = cfg.testGate.runCommandRoot' chk 0 - chk_log "^-q -pl svc-b -am test"
 reverse "nearest pom wins" 1 'if (existsSync(resolve(ROOT, d, "pom.xml"))) return d === "." ? "" : d' 'if (d === "svc-a" && existsSync(resolve(ROOT, d, "pom.xml"))) return d' chk 0 - chk_log "^-q -pl svc-a/inner -am test"
 # a test of the same name in ANOTHER module does not count
-rm -f svc-b/src/test/java/x/BServiceTest.java; cp svc-a/src/test/java/x/AServiceTest.java svc-a/src/test/java/x/BServiceTest.java; sed -i 's/AServiceTest/BServiceTest/; s/AService/BService/' svc-a/src/test/java/x/BServiceTest.java
+rm -f svc-b/src/test/java/x/BServiceTest.java; cp svc-a/src/test/java/x/AServiceTest.java svc-a/src/test/java/x/BServiceTest.java; sedi 's/AServiceTest/BServiceTest/; s/AService/BService/' svc-a/src/test/java/x/BServiceTest.java
 check "a same-named test in ANOTHER module does not satisfy the gate" 1 'no unit test found in module "svc-b"' $G test --task "$T"
 has "...and the expected path is inside svc-b" "svc-b/src/test/java/x/BServiceTest.java"
 reverse "tests must live in the same module" 1 'to: "$1src/test/java/$2/$3Test.java" },' 'to: "svc-a/src/test/java/$2/$3Test.java" },' chk 1 'no unit test found in module "svc-b"' $G test --task "$T"
@@ -1310,7 +1313,7 @@ package com.acme;
 import org.junit.jupiter.api.Test;
 class OrderControllerTest { @Test void post_ok() {} }
 X
-sed -i 's/void helperOnly() {}/@org.junit.jupiter.api.Test void left_ok() {}/' src/test/java/com/acme/StockServiceTest.java
+sedi 's/void helperOnly() {}/@org.junit.jupiter.api.Test void left_ok() {}/' src/test/java/com/acme/StockServiceTest.java
 git add -A >/dev/null 2>&1; git -c user.email=a@b -c user.name=t commit -qm complete --no-verify >/dev/null 2>&1
 export FAKE_OCR_FINDINGS_FILE="$HERE/fixtures/ocr/findings-high-low.json"
 gcm() { git -c user.email=a@b -c user.name=t commit -q -m "$1" 2>&1; }          # a real commit: the hook runs
@@ -1537,7 +1540,7 @@ reverse "gates.<name> overrides the profile" 1 'if (cfg.gates && cfg.gates[name]
 setcfg '{"gates":{"lintPlan":"off"}}'
 check "gates.lintPlan=off: not run, one note" 0 "skipped: lintPlan is off \(gates.lintPlan\)" $G lint-plan "$T"
 reverse "off skips the gate" 1 'if (gateMode(cfg, name) === "off") return skippedReport(title, name)' 'if (false) return skippedReport(title, name)' chk 0 "skipped: lintPlan is off" $G lint-plan "$T"
-setcfg '{"profile":"strict"}'; sed -i '$d' "$W/$T/design.md"; sed -i '$d' "$W/$T/design.md"
+setcfg '{"profile":"strict"}'; sedi '$d' "$W/$T/design.md"; sedi '$d' "$W/$T/design.md"
 # design-review (L) missing report
 check "strict: an L task without a review report fails design-review" 1 "reviews/design-review.md missing" $G design-review "$T"
 setcfg '{"gates":{"designReview":"off"}}'
@@ -1696,6 +1699,8 @@ check "doctor agrees after install" 0 "everything in place" node "$TOOL/trellis-
 check "install again is idempotent" 0 "0 created, 0 updated" qi $INST "$QF"
 [ "$(grep -c '^trellis init' "$QLOG")" = 1 ] && ok "second install did not run init again" || bad "second install did not run init again"
 check "no git repo: warns that the hook was skipped" 0 "pre-commit hook was skipped" qi $INST "$QF"
+check "existing project also honours --git-init" 0 "Installed" qi $INST "$QF" --git-init
+[ -x "$QF/.git/hooks/pre-commit" ] && ok "...and installs the hook on the existing project" || bad "...and installs the hook on the existing project"
 QG="$WORK/q-git"; mkdir -p "$QG"
 check "--git-init creates the repo so the hook is installed" 0 "Installed" qi $INST "$QG" -u luke --git-init
 [ -x "$QG/.git/hooks/pre-commit" ] && ok "pre-commit hook exists after --git-init" || bad "pre-commit hook exists after --git-init"
@@ -1712,6 +1717,9 @@ grep -q "^npx -y -p @mindfoldhq/trellis@0.6.17 trellis init" "$QLOG" && ok "npx 
 QT="$WORK/q-tgz"; mkdir -p "$QT"; : > "$QLOG"
 check "--trellis-pkg <tgz> (offline/intranet) is honoured even when a global trellis matches" 0 "Installed" qi $INST "$QT" -u luke --trellis-pkg ./mindfoldhq-trellis-0.6.17.tgz
 grep -q "^npx -y -p ./mindfoldhq-trellis-0.6.17.tgz trellis init" "$QLOG" && ok "npx got the tarball spec" || { bad "npx got the tarball spec"; cat "$QLOG"; }
+QNPX="$WORK/q-npx-bin"; QNP="$WORK/q-pkg-no-npx"; mkdir -p "$QNPX" "$QNP"; ln -sf /usr/bin/false "$QNPX/npx"
+check "--trellis-pkg without npx fails in preflight with an actionable hint" 2 "omit --trellis-pkg" env PATH="$QNPX:$QPATH" FAKE_TRELLIS_BASE="$BASE" FAKE_TRELLIS_LOG="$QLOG" node "$TOOL/trellis-plus.mjs" install "$QNP" -u luke --trellis-pkg ./offline.tgz
+[ ! -e "$QNP/.trellis" ] && ok "...and nothing was patched" || bad "...and nothing was patched"
 
 # --- existing project: init is skipped, the version is enforced
 QE="$WORK/q-exist"; fresh "$QE"; : > "$QLOG"
@@ -1731,8 +1739,8 @@ echo "== R. update: pinned trellis update --force + apply + doctor, user traces 
 RPATH="$HERE/fake-trellis:$PATH"; RLOG="$WORK/r.log"; export FAKE_TRELLIS_BASE="$BASE"
 ri() { env PATH="$RPATH" FAKE_TRELLIS_LOG="$RLOG" "$@"; }
 UPD="node $TOOL/trellis-plus.mjs update"
-# the user-owned part of a project (what update must keep byte for byte)
-mine() { ( cd "$1" && find .trellis/spec .trellis/tasks .trellis/workspace .trellis/.developer .trellis/config.yaml .trellis/plus/plus.config.json -type f 2>/dev/null | grep -v '\.plus-new$' | sort | xargs sha256sum ); }
+# the user-owned part of a project (plus.config.json is checked separately: only its version may change)
+mine() { ( cd "$1" && find .trellis/spec .trellis/tasks .trellis/workspace .trellis/.developer .trellis/config.yaml -type f 2>/dev/null | grep -v '\.plus-new$' | sort | xargs sha256sum ); }
 # a project with trellis-plus applied (--all) and some "usage traces"
 mkuse() { mkproj "$1"
   mkdir -p "$1/.trellis/workspace/luke" "$1/.trellis/tasks/11-14-demo" "$1/.trellis/spec/backend"
@@ -1764,7 +1772,7 @@ echo "my edit" >> "$RU/.trellis/spec/guides/plus-testing-guide.md"    # plus-man
 mine "$RU" > "$WORK/ru-before"
 check "update: exit 0 and the from -> to line" 0 "Updated: Trellis 0.6.17 -> 0.6.17, trellis-plus .* -> 3\.0\.0" ri $UPD "$RU"
 mine "$RU" > "$WORK/ru-after"
-cmp -s "$WORK/ru-before" "$WORK/ru-after" && ok "spec/ tasks/ workspace/ .developer config.yaml plus.config.json are byte-identical" || { bad "protected files are byte-identical"; diff "$WORK/ru-before" "$WORK/ru-after" | head -5; }
+cmp -s "$WORK/ru-before" "$WORK/ru-after" && ok "spec/ tasks/ workspace/ .developer config.yaml are byte-identical (plus.config is checked separately)" || { bad "protected files are byte-identical"; diff "$WORK/ru-before" "$WORK/ru-after" | head -5; }
 has "config.yaml: the rewrite by trellis was undone" "config\.yaml: Trellis rewrote it, your version was put back"
 grep -q "update --force" "$RLOG" && ok "trellis update ran with --force" || bad "trellis update ran with --force"
 grep -q -- "--migrate" "$RLOG" && bad "no --migrate when the version does not change" || ok "no --migrate when the version does not change"
@@ -1777,6 +1785,30 @@ check "doctor accepts the kept edit (warn, not a failure)" 0 "your local edit is
 [ -x "$RU/.git/hooks/pre-commit" ] && ok "pre-commit hook still installed" || bad "pre-commit hook still installed"
 ls -d "$RU"/.trellis/plus/backup/*/protected >/dev/null 2>&1 && ok "protected files were copied to .trellis/plus/backup/<time>/protected" || bad "protected snapshot exists"
 
+# --- plus.config.json: version may advance, every other byte stays
+RC="$WORK/r-plus-config"; mkuse "$RC"; RPC="$RC/.trellis/plus/plus.config.json"; ROLD=0.0.1-test
+[ "$ROLD" = "$TV" ] && ROLD=0.0.2-test
+python3 - "$RPC" "$TV" "$ROLD" <<'PY' || bad "could not set a non-current plus.config version"
+import sys
+f, current, old = sys.argv[1:]
+s = open(f, encoding="utf8").read()
+anchor = f'"version": "{current}"'
+assert s.count(anchor) == 1
+open(f, "w", encoding="utf8").write(s.replace(anchor, f'"version": "{old}"', 1))
+PY
+cp "$RPC" "$WORK/rc-before"
+check "a non-current plus.config version is updated by update" 0 "Updated:" ri $UPD "$RC"
+if python3 - "$WORK/rc-before" "$RPC" "$ROLD" "$TV" <<'PY'
+import json, sys
+before_f, after_f, old, current = sys.argv[1:]
+before = open(before_f, encoding="utf8").read()
+after = open(after_f, encoding="utf8").read()
+expected = before.replace(f'"version": "{old}"', f'"version": "{current}"', 1)
+assert after == expected, "plus.config changed beyond the version text"
+assert json.loads(after)["__mine"] is True
+PY
+then ok "...only version changes; the user's other keys and layout remain"; else bad "...only version changes; the user's other keys and layout remain"; fi
+
 # --- a violation by trellis (modifies / deletes protected files) is undone and stops before apply
 RV="$WORK/r-viol"; mkuse "$RV"; mine "$RV" > "$WORK/rv-before"
 check "trellis modifies a spec file -> exit 1, restored" 1 "protected: \.trellis/spec/backend/my-rules\.md was modified" ri env FAKE_TRELLIS_TOUCH=.trellis/spec/backend/my-rules.md $UPD "$RV"
@@ -1784,6 +1816,9 @@ check "trellis modifies a spec file -> exit 1, restored" 1 "protected: \.trellis
 hasnt "...and apply did not run after the violation" "trellis-plus apply"
 check "trellis deletes a task file -> exit 1, restored" 1 "protected: \.trellis/tasks/11-14-demo/notes\.md was deleted" ri env FAKE_TRELLIS_DELETE=.trellis/tasks/11-14-demo/notes.md $UPD "$RV"
 [ -f "$RV/.trellis/tasks/11-14-demo/notes.md" ] && ok "...the deleted task file is back" || bad "...the deleted task file is back"
+RA="$WORK/r-added"; mkuse "$RA"
+check "trellis adds a protected spec file -> exit 1, removed" 1 "protected: \.trellis/spec/backend/added\.md was added" ri env FAKE_TRELLIS_TOUCH=.trellis/spec/backend/added.md $UPD "$RA"
+[ ! -e "$RA/.trellis/spec/backend/added.md" ] && ok "...the added file is gone" || bad "...the added file is gone"
 mine "$RV" > "$WORK/rv-after"; cmp -s "$WORK/rv-before" "$WORK/rv-after" && ok "after both violations everything protected is identical" || bad "after both violations everything protected is identical"
 
 # --- trellis update fails
@@ -1796,6 +1831,8 @@ RW="$WORK/r-ver"; mkuse "$RW"; echo "0.6.18" > "$RW/.trellis/.version"
 check "project newer than the pin -> refused" 1 "newer than the 0\.6\.17 this trellis-plus targets" ri $UPD "$RW"
 : > "$RLOG"; check "--allow-downgrade moves it back to the pin" 0 "downgrading Trellis 0\.6\.18 -> 0\.6\.17" ri $UPD "$RW" --allow-downgrade
 grep -q -- "--allow-downgrade" "$RLOG" && ok "...and passes --allow-downgrade to trellis update" || bad "...and passes --allow-downgrade to trellis update"
+[ -f "$RW/.trellis/config.yaml.trellis-new" ] && ok "downgrade saves Trellis's new config.yaml as config.yaml.trellis-new" || bad "downgrade saves config.yaml.trellis-new"
+grep -q "MY CUSTOM SETTING" "$RW/.trellis/config.yaml" && ok "...while the user's config.yaml is kept" || bad "...while the user's config.yaml is kept"
 RO="$WORK/r-old"; mkuse "$RO"; echo "0.6.16" > "$RO/.trellis/.version"; : > "$RLOG"
 check "project older than the pin -> upgraded" 0 "Updated: Trellis 0\.6\.16 -> 0\.6\.17" ri $UPD "$RO"
 grep -q "update --force --migrate" "$RLOG" && ok "upgrade passes --migrate" || { bad "upgrade passes --migrate"; cat "$RLOG"; }
@@ -1822,7 +1859,16 @@ grep -q "^npx -y -p ./mindfoldhq-trellis-0.6.17.tgz trellis update" "$RLOG" && o
 # --- snapshots do not pile up: only the 3 newest are kept
 RS="$WORK/r-prune"; mkuse "$RS"
 for i in 1 2 3 4 5; do ri $UPD "$RS" >/dev/null 2>&1; done
-[ "$(ls -d "$RS"/.trellis/plus/backup/*/protected 2>/dev/null | wc -l)" = 3 ] && ok "after 5 updates only 3 protected snapshots remain" || bad "after 5 updates only 3 protected snapshots remain ($(ls -d "$RS"/.trellis/plus/backup/*/protected 2>/dev/null | wc -l))"
+[ "$(ls -d "$RS"/.trellis/plus/backup/*/protected 2>/dev/null | wc -l | tr -d ' ')" = 3 ] && ok "after 5 updates only 3 protected snapshots remain" || bad "after 5 updates only 3 protected snapshots remain ($(ls -d "$RS"/.trellis/plus/backup/*/protected 2>/dev/null | wc -l | tr -d ' '))"
+[ "$(find "$RS/.trellis/plus/backup" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')" = 3 ] && ok "...and managed backup directories are bounded too" || bad "...and managed backup directories are bounded too"
+
+# --- failed updates and standalone apply runs must not grow backups without bound
+RFIVE="$WORK/r-prune-fail"; mkuse "$RFIVE"
+for i in 1 2 3 4 5; do ri env FAKE_TRELLIS_FAIL_UPDATE=1 $UPD "$RFIVE" >/dev/null 2>&1; done
+[ "$(find "$RFIVE/.trellis/plus/backup" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')" -le 3 ] && ok "failed updates keep at most 3 backup directories" || bad "failed updates keep at most 3 backup directories"
+RA="$WORK/r-prune-apply"; mkuse "$RA"
+for i in 1 2 3 4 5; do echo "// apply $i" >> "$RA/.trellis/plus/gate.mjs"; node "$TOOL/trellis-plus.mjs" apply "$RA" --all --force >/dev/null 2>&1; done
+[ "$(find "$RA/.trellis/plus/backup" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')" -le 3 ] && ok "standalone apply also keeps at most 3 backup directories" || bad "standalone apply also keeps at most 3 backup directories"
 fi
 
 echo

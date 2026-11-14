@@ -5,7 +5,7 @@
 
 > **【2026-10-23 更正】** 本文 §0、§2.7、§5 及 §1.4 的行数仍是旧会话状态（421 通过、无 Git、交付 zip、沙箱路径 `/home/claude/work/...`）。现状：项目是 GitHub 仓库 `luke8050/trellis-plus`，以 §8、「v2.2 变更」与文末「v2.3 会话进度」为准；回归当前 640 通过 / 0 失败 / 1 跳过。
 
-> **【2026-11-14 更新】** 版本现为 **3.0.0**：新增 `install`（一条命令装固定版本 Trellis 0.6.17 + trellis-plus）与 `update`（升级已装项目并保留使用痕迹）。最新状态、设计决策与“哪些文件 AI 可忽略”见文末「v3.0.0 会话」。回归现为 715 通过 / 0 失败 / 1 跳过。
+> **【2026-11-14 更新】** 版本现为 **3.0.0**：新增 `install`（一条命令装固定版本 Trellis 0.6.17 + trellis-plus）与 `update`（升级已装项目并保留使用痕迹）。最新状态、设计决策与“哪些文件 AI 可忽略”见文末「v3.0.0 会话」。回归现为 728 通过 / 0 失败 / 1 跳过。
 
 ## 0. 30 秒摘要
 
@@ -387,7 +387,7 @@ OCR：`ocrGate`、`extractFindings`、`parseTriage`、`matchEntry`、`hasCodeEvi
 ### update 的设计（改动前先读，决定都有实测依据）
 1. **用 `trellis update --force`，不用 `revert → update → apply`**。后者在真实 0.6.17 上也能工作（revert 后 `trellis update -s` 显示 Already up to date，无冲突），但 `-s` 会跳过用户在 Trellis 管理文件里的其他改动，不符合“其他目录文件可直接覆盖升级”的要求；所以用 `--force`，上游会先备份到 `.trellis/.backup-<时间>/`。
 2. **受保护清单 `PROTECTED`**：上游 `PROTECTED_PATHS`（读 `dist/commands/update.js` 得到）是 `workspace/`、`tasks/`、`spec/`、`.developer`、`.current-task`，上游保证不动。**实测 `trellis update --force` 会重写 `.trellis/config.yaml`**（用户自定义行丢失，只留在上游备份里），所以另加 `config.yaml`（`RESTORE_QUIETLY`：被重写是已知行为，静默还原）和 `plus/plus.config.json`、`plus/manifest.json`。
-3. **自己校验、不信任上游**：执行前把受保护文件复制到 `.trellis/plus/backup/<时间>/protected/` 并记 sha256；执行后逐个比对，变了或没了就还原；除 `config.yaml` 外的任何变化都视为违规：已还原、**在 apply 之前停止**、退出码 1。只保留最近 3 份快照（`pruneSnapshots`）。
+3. **自己校验、不信任上游**：执行前把受保护文件复制到 `.trellis/plus/backup/<时间>/protected/` 并记 sha256；执行后逐个比对，变了/没了就还原，受保护目录里新增的文件删除；除 `config.yaml` 外的任何变化都视为违规：已还原/删除、**在 apply 之前停止**、退出码 1。只保留最近 3 份受保护快照（并清理更旧的备份目录，`pruneSnapshots`）。
 4. **版本**：项目 Trellis 比固定版本新 → 拒绝，`--allow-downgrade` 才退回（并传给上游）；比它旧 → 传 `--migrate`；缺 `.trellis/.version` → 拒绝，`--allow-version` 可越过。版本变化时上游新的 `config.yaml` 另存为 `config.yaml.trellis-new`，用户自己合并。
 5. **apply 的选项**：沿用 `manifest.options`（上次选的），没有记录才 `--all`。
 6. **覆盖规则**：随包文件在 `.trellis/spec/` 之外一律覆盖（旧文件备份到 `.trellis/plus/backup/<时间>/`）；`.trellis/spec/` 内的随包指南用户改过就保留并写 `.plus-new`（`FORCE_MANAGED` 只对 spec 之外生效）。`plus.config.json` 仍是 `createOnly`。
@@ -395,11 +395,23 @@ OCR：`ocrGate`、`extractFindings`、`parseTriage`、`matchEntry`、`hasCodeEvi
 
 ### 验证结果（实际执行）
 - **真实端到端**：从 `npm pack` 的 tgz 用 `npx -p` 在空目录里 `install`（真实 Trellis 0.6.17）→ 14 个文件、5 处补丁、hook、doctor 通过；重复 `install` 0 新建 0 更新；真实 `task.py start` 被硬门禁拦住。
-- **真实 update**：制造了 `spec/`、`tasks/`、`workspace/`、`.developer`、`config.yaml` 自定义行、`plus.config.json` 自定义键、`spec/` 内随包指南的本地改动、`gate.mjs` 与 `agents/check.md` 的本地改动。结果：33 个受保护文件**逐字节一致**；`gate.mjs` 与 `agents/check.md` 被覆盖（符合预期）；`spec` 内指南被保留并生成 `.plus-new`；补丁与 hook 恢复；doctor 通过。
-- **回归**：`BASE=<trellis-opencode 绝对路径> bash test-harness/run-regression.sh` → **715 通过 / 0 失败 / 1 跳过**（原 640；Q 组 31 条 = install，R 组 44 条 = update）。跳过项仍是 v1.1→v2 升级用例（缺 `V11_TOOL`）。
-- **变异验证（反向对照）**：把 `verifyProtected` 改成永不还原 → R 组 10 条失败；把 `config.yaml` 移出保护 → 6 条失败；对 `spec/` 也强制覆盖 → 4 条失败。三次后原版均 44/0。
+- **真实 update**：制造了 `spec/`、`tasks/`、`workspace/`、`.developer`、`config.yaml` 自定义行、`plus.config.json` 自定义键、`spec/` 内随包指南的本地改动、`gate.mjs` 与 `agents/check.md` 的本地改动。结果：除 `plus.config.json` 的 `version` 键外，33 个受保护文件**逐字节一致**；`plus.config.json` 只更新 `version`，其他键和文本布局不变；`gate.mjs` 与 `agents/check.md` 被覆盖（符合预期）；`spec` 内指南被保留并生成 `.plus-new`；补丁与 hook 恢复；doctor 通过。
+- **回归**：`BASE=<trellis-opencode 绝对路径> bash test-harness/run-regression.sh` → **728 通过 / 0 失败 / 1 跳过**（原 640；Q 组 35 条 = install，R 组 53 条 = update）。跳过项仍是 v1.1→v2 升级用例（缺 `V11_TOOL`）。
+- **变异验证（反向对照）**：把 `verifyProtected` 改成永不还原 → R 组 10 条失败；把 `config.yaml` 移出保护 → 6 条失败；对 `spec/` 也强制覆盖 → 4 条失败。三次恢复后原版均通过。
 - 测试用 `test-harness/fake-trellis/{trellis,npx}`（环境变量见该文件头注释），不联网。
-- 源码 sha256 前 16 位：trellis-plus.mjs `7ddd8221156a5c8a`、run-regression.sh `c2bba58e83ec69e6`、gate.mjs `8795937de5111828`（gate.mjs 本轮未改）。
+- 源码 sha256 前 16 位（第二轮修复后）：trellis-plus.mjs `2eb98144fb34f372`、run-regression.sh `64a7c14a38ca43c3`、gate.mjs `8795937de5111828`（gate.mjs 本轮未改）。
+
+### 复查修复（2026-11-14，第二轮）
+- `install --git-init` 现在对**已有** `.trellis/.opencode` 的项目也生效（`git init` 移到 init 分支之外）；实测 non-git 项目加该参数后 `.git` 与 pre-commit hook 都出现。
+- npx 只在真正要用时检查：全局 `trellis --version` 恰为 0.6.17 时，install/update 不再要求 npx；`--trellis-pkg` 仍走 npx，npx 缺失会在预检阶段明确报错（不再先放过再 `spawnSync npx ENOENT`）。npx/git 检查同时看退出码，不只 `.error`。
+- `verifyProtected` 现在也删除 Trellis 在受保护目录里**新增**的文件（之前只还原改/删）；新增一个 spec 文件实测会被删掉并让 update 退出 1。
+- `pruneSnapshots` 现在清理整个旧备份目录（不只 `protected/`），并在快照创建后、`apply` 完成或失败时执行；成功、失败和独立 `apply` 路径都最多保留最近 3 份目录。
+- `--allow-downgrade` 或升级导致 Trellis 版本变化时，都会保存 `.trellis/config.yaml.trellis-new`（之前只在升级时保存）。
+- `install --dry-run` 在已安装项目上只预览 `apply`，不再跑 `doctor` 或打印 "Installed"；已有项目版本不符时的报错会提示用 `update`；`--allow-version` 时最后一行显示项目**实际**的 Trellis 版本。
+- `developerName()` 的 `git config user.name` 改为在目标项目里读（`git -C <project>`），不是当前工作目录。
+- 回归测试可移植：新增 `sedi()` 兼容 BSD/GNU `sed -i`，`touch -d` 改为 Python `os.utime`；R 组 `wc -l` 去前导空格。**macOS 全量实测 728 通过 / 0 失败 / 1 跳过**。
+- 文档同步：`plus.config.json` 不再声称逐字节保留（`version` 键会被 `apply` 更新）；`test-harness/README.md` 补 R 组；HANDOFF 里 `trellis-opencode/` 已删除的说法改正；README 的 macOS 回归数字更新。
+- 仍未处理：Windows 与内网 npm 源仍未验证。Q/R 组现已覆盖已有项目 `--git-init`、新增受保护文件删除、降级配置另存、非当前 `plus.config.json` 版本、失败备份上限和独立 `apply` 备份上限（`fake-trellis/` 已随 v3 提交 `7f44ce7` 入库）。
 
 ### 未验证 / 已知问题
 - **内网私有 npm 源**、**Windows**（代码里对 `npx`/`npm` 加了 `.cmd` 处理，但没在 Windows 上跑过）、重启 OpenCode 后补丁实际加载效果：未验证。
@@ -411,7 +423,7 @@ OCR：`ocrGate`、`extractFindings`、`parseTriage`、`matchEntry`、`hasCodeEvi
 ### 仓库里哪些文件对“以后让 AI 修改 / 升级 trellis-plus”没用（可忽略；打包时已排除）
 | 路径 | 为什么用不上 |
 |---|---|
-| `trellis-opencode/`（约 1.2 MB、113 个文件） | 只是回归的 `BASE`（`trellis init --opencode` 的输出，上游 AGPL 产物），本轮没改。需要时一条命令重新生成：`npx -y -p @mindfoldhq/trellis@0.6.17 trellis init --opencode -u regression -y`（在空目录里执行）。仓库里保留它，是为了回归可离线运行 |
+| `trellis-opencode/`（约 1.2 MB、113 个文件） | 只是回归的 `BASE`（`trellis init --opencode` 的输出，上游 AGPL 产物）。已在本轮 `a8c5feb` 删除；需要时一条命令重新生成：`npx -y -p @mindfoldhq/trellis@0.6.17 trellis init --opencode -u regression -y`（在空目录里执行），所以回归需要自备 `BASE` |
 | `docs/ocr命令输出.txt`（33 KB） | 真实 `ocr review --help` / `ocr llm test` 的终端原文；没有任何文件引用它；结论已写进 §2.10，行为已固化在 `test-harness/fake-ocr` 与 `fixtures/ocr/` |
 | `docs/优化进度.md` | 2026-10-14 的状态快照，已被 §2.9 / §8 取代，内容过期 |
 | `trellis-plus/docs/archive/`（v1.1 两份计划，约 95 KB） | v1.1 时代的方案，已被 v2 取代；被否决的做法与差异已在 §1.6、§3.8 记录。保留只会让 AI 读到过期设计 |

@@ -7,7 +7,7 @@
 [![npm](https://img.shields.io/npm/v/@luke8050/trellis-plus?color=blue)](https://www.npmjs.com/package/@luke8050/trellis-plus)
 [![node](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
 [![license](https://img.shields.io/badge/license-MIT-blue)](#license)
-[![tests](https://img.shields.io/badge/regression-715%20assertions-success)](./trellis-plus/test-harness)
+[![tests](https://img.shields.io/badge/regression-728%20assertions-success)](./trellis-plus/test-harness)
 
 **Trellis**（`trellis init`，OpenCode 平台）负责"任务 → 计划 → 实现 → 检查 → 提交"的骨架。trellis-plus 在这个骨架上补四件事，且几乎不增加 token 开销——所有检查都是 Node 脚本在本地跑，不调用模型。
 
@@ -88,16 +88,18 @@ npx @luke8050/trellis-plus@latest update <project>
 npx @luke8050/trellis-plus@latest update <project> --dry-run   # 先看计划和 trellis 的变更预览
 ```
 
-`update` 依次做：① 预检 → ② 把受保护文件复制到 `.trellis/plus/backup/<时间>/protected/` → ③ 用固定版本执行 `trellis update --force`（项目 Trellis 版本落后时加 `--migrate`）→ ④ 校验受保护文件，被改动或删除的从备份还原 → ⑤ 按**上次的选项**重新 `apply`（没有记录则 `--all`）→ ⑥ `doctor`。
+`update` 依次做：① 预检 → ② 把受保护文件复制到 `.trellis/plus/backup/<时间>/protected/` → ③ 用固定版本执行 `trellis update --force`（项目 Trellis 版本落后时加 `--migrate`）→ ④ 校验受保护文件，被改动/删除的从备份还原、被新增的删除 → ⑤ 按**上次的选项**重新 `apply`（没有记录则 `--all`）→ ⑥ `doctor`。
 
 | | 内容 |
 |---|---|
-| **逐字节保留** | `.trellis/spec/`、`.trellis/tasks/`、`.trellis/workspace/`、`.trellis/.developer`、`.trellis/.current-task`（上游自己也保护这五项）；另加 `.trellis/config.yaml`（`trellis update --force` 会重写它，已用真实 0.6.17 验证，所以由 `update` 校验并还原）和 `.trellis/plus/plus.config.json` |
+| **逐字节保留** | `.trellis/spec/`、`.trellis/tasks/`、`.trellis/workspace/`、`.trellis/.developer`、`.trellis/.current-task`（上游自己也保护这五项）；另加 `.trellis/config.yaml`（`trellis update --force` 会重写它，已用真实 0.6.17 验证，所以由 `update` 校验并还原） |
 | **直接覆盖** | Trellis 管理的其余文件（`.trellis/scripts/`、`agents/`、`workflow.md`、`.opencode/` 下的 agents / lib 等）和 trellis-plus 随包文件（`.trellis/plus/gate.mjs`、模板、`plus-*` skills / agents）。你自己新增、Trellis 不管理的文件不动 |
 | **例外** | 位于 `.trellis/spec/` 内的随包指南（`plus-testing-guide.md` 等）：你改过就保留，新版本写到 `*.plus-new` |
-| **备份** | `.trellis/plus/backup/<时间>/`（trellis-plus 覆盖的文件，及受保护文件的完整副本，只留最近 3 份）、`.trellis/.backup-<时间>/`（Trellis 覆盖的文件） |
+| **备份** | `.trellis/plus/backup/<时间>/`（trellis-plus 覆盖的文件，及受保护文件的完整副本；受保护快照保留最近 3 份，更旧的备份目录也会清理）、`.trellis/.backup-<时间>/`（Trellis 覆盖的文件） |
 
-项目的 Trellis 比 0.6.17 新时拒绝执行（`--allow-downgrade` 才退回）；Trellis 升版本时，它的新 `config.yaml` 另存为 `.trellis/config.yaml.trellis-new`，由你合并新增段落。选项同 `install`：`--dry-run`、`--allow-version`、`--trellis-pkg <spec>`。
+`.trellis/plus/plus.config.json` 同样保留，但 `apply` 会更新其中 `version` 键为当前工具版本（其余键与排版不变）。
+
+项目的 Trellis 比 0.6.17 新时拒绝执行（`--allow-downgrade` 才退回）；Trellis 版本变化（升级或 `--allow-downgrade` 降级）时，它的新 `config.yaml` 另存为 `.trellis/config.yaml.trellis-new`，由你合并新增段落。选项同 `install`：`--dry-run`、`--allow-version`、`--trellis-pkg <spec>`。
 
 **分步方式**（已经自己跑过 `trellis init --opencode` 的项目）：
 
@@ -224,8 +226,8 @@ TRELLIS_DEVELOPER=<任意名字> BASE=../trellis-opencode bash test-harness/run-
 - 必须用 bash；退出码 = 失败断言数。
 - 全程使用假 `ocr` / 假 `mvn` / 夹具，不联网。
 - 每条门禁规则都有正例、反例，以及**反向对照**：临时把规则逻辑改坏，同一条断言必须失败。规则在自身变异下仍然通过，说明测试是假的。
-- 结果（Linux / GNU coreutils）：**715 通过 / 0 失败 / 1 跳过**（跳过的是 v1.1 → v2 升级用例，需 `V11_TOOL`）。
-- macOS 上实测 626 / 3 / 1：失败项来自 BSD 工具差异（`touch -d 'now + 30 seconds'` 不被支持、mtime 精度不同导致 OCR 过期用例抖动），与门禁逻辑无关。
+- 结果（Linux / GNU coreutils）：**728 通过 / 0 失败 / 1 跳过**（跳过的是 v1.1 → v2 升级用例，需 `V11_TOOL`）。
+- macOS/BSD 上同样可跑通（`sed -i` / `touch -d` 已改为可移植写法），实测 **728 通过 / 0 失败 / 1 跳过**。
 
 发布新版本只需改 `package.json` 的 `version` —— 安装器从那里读版本号并写进项目的 `plus.config.json`，仓库里没有第二处硬编码的版本。
 

@@ -1,6 +1,6 @@
 #### 2.4 Test gate `[required · repeatable]`
 
-Runs after 2.2 passes. Every added/modified Service/Controller (`*Controller.java`, `*Service.java`, `*ServiceImpl.java`) needs a unit test added or updated in the same change, in the same Maven module. Tier S cannot contain such a change; tier M at most 3 classes in one module.
+Runs after 2.2 passes. Every added/modified Service/Controller (`*Controller.java`, `*Service.java`, `*ServiceImpl.java`) needs a unit test added or updated in the same change, in the same Maven module. The test rule is the same for every tier.
 
 ```bash
 node ./.trellis/plus/gate.mjs test --task {TASK_DIR} --run

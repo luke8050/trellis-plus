@@ -21,7 +21,7 @@ Pure interfaces are skipped. Exemptions only via `implement.md` → 测试豁免
 ## Tier limits
 
 - **S**: a task marked S that changes a Service/Controller fails here. Raise it: `gate tier <task> M|L`, `gate seed`, write design.md / implement.md.
-- **M**: at most 3 changed Service/Controller classes in one module; beyond that: `gate tier <task> L`.
+- **M**: suggested up to 3 changed Service/Controller classes in one module. Beyond that the gate only warns: the user's tier stands, do not change it yourself.
 
 ## When it fails
 

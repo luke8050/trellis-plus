@@ -11,7 +11,7 @@ BASE=/path/to/a/trellis-initialized/project  bash test-harness/run-regression.sh
 | 组 | 内容 |
 |---|---|
 | A | 安装 / 幂等 / doctor / 步骤解析 / 面包屑体积 / plugin / v1.1 升级 / revert 字节级还原 |
-| B C | tier（存储、原因、拒绝、legacy 兼容）、seed |
+| B C | tier（存储、原因、建议级别与 warn、legacy 兼容）、seed |
 | D | align 四项检查 |
 | E | lint-plan（真实性类 error、风格类 warn、legacy 宽容、体积、M/S 级别） |
 | F G | anchors / matrix / status / usage；design-review 头部与阻塞回应 |
@@ -21,6 +21,9 @@ BASE=/path/to/a/trellis-initialized/project  bash test-harness/run-regression.sh
 | L | git hook 与任务选择 |
 | Q | `install`：固定版本 init + apply --all + doctor（假 trellis / npx：干跑、缺名字、全局版本不符走 npx、`--trellis-pkg` 及缺 npx 提示、新项目/已有项目 `--git-init`、init 失败不打补丁、版本不符拒绝与 `--allow-version`、幂等） |
 | R | `update`：固定版本 `trellis update --force` + 按上次选项 apply + doctor；受保护文件逐字节保留/还原/删除新增、`plus.config.json` 只更新 version、版本升降级、`config.yaml.trellis-new`、成功/失败/独立 apply 的备份上限（假 trellis） |
+| S | 任务流程记录：`task.json` 的 `meta.plus_flow`（S/M/L 步骤表、门禁通过/失败、off 与 warn 不计为通过、换档保留进度） |
+| T | AGENTS.md 编码规范（`apply --all` / `--coding-rules` / `--no-coding-rules`、幂等、revert、doctor、update 补默认） |
+| U | `trellis-plus status`（默认/`--all`/`--json`、进度条、建议级别、完成态、坏 JSON） |
 | M | 随包资产（reviewer agent、workflow 体积回归线、样例、无旧名称残留） |
 
 ## 约定
@@ -34,6 +37,6 @@ BASE=/path/to/a/trellis-initialized/project  bash test-harness/run-regression.sh
 ## 注意（v2.1）
 
 - `BASE` 可以是相对路径（脚本会先转成绝对路径）。
-- 直接用 `BASE=<GitHub 上的 trellis-opencode>` 运行时，BASE 里没有被 gitignore 的 `.trellis/.developer`；脚本默认导出 `TRELLIS_DEVELOPER=regression`，也可自行设置。
+- 回归基线先复现：用真实 `npx @mindfoldhq/trellis@0.6.17 init --opencode -u regression -y` 生成 BASE，并删掉 BASE 里的 `.git`（带 `.git` 会让 3 条依赖「无 git / git 根在上层」的用例误失败）。
 - `fake-ocr/ocr`、`fake-mvn/mvn`、`mkjava.sh` 需要可执行位（经 GitHub 网页上传会丢失，需 `chmod +x` 或用 git 提交模式变更）。
 - `reverse_file` 可对安装器或 assets 做同样的“临时破坏后断言必须失败”对照。

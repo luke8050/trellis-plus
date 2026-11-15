@@ -7,6 +7,8 @@
 
 > **【2026-11-14 更新】** 版本现为 **3.0.0**：新增 `install`（一条命令装固定版本 Trellis 0.6.17 + trellis-plus）与 `update`（升级已装项目并保留使用痕迹）。最新状态、设计决策与“哪些文件 AI 可忽略”见文末「v3.0.0 会话」。回归现为 728 通过 / 0 失败 / 1 跳过。
 
+> **【2026-11-14 再更新】** 版本现为 **3.1.0**（级别以人为准、task.json 流程记录与 `status` 命令、AGENTS.md 编码规范、hook 默认 warn；见文末「v3.1.0 会话」，回归 819 通过 / 0 失败 / 1 跳过）。
+
 ## 0. 30 秒摘要
 
 - **做什么**：`trellis-plus` 是给已 `trellis init`（Trellis 0.6.17，OpenCode 平台）的项目加一层确定性门禁 + S/M/L 分级流程的 Node 脚本；目标项目是 **Java 8 + Maven 多模块 + JUnit5 + Mockito**（不用 JaCoCo）。本轮是 v1.1 → **v2 优化编码**。
@@ -50,9 +52,9 @@
 | `assets/agents/plus-design-reviewer.md` | 唯一评审 agent（用户评审提示词 + 报告头 + 第 2 轮增量） | 90 |
 | `assets/skills/{plus-draft,plus-test-gate,plus-ocr-review}/SKILL.md` | 三个 skill | 41/37/48 |
 | `assets/commands/plus-grill-design.md` | 可选命令 `/plus-grill-design` | 10 |
-| `assets/workflow/{index,phase1,phase2}.md` | 注入 workflow.md 的块（共 6505 字节） | 24/30/21 |
+| `assets/workflow/{index,phase1,phase2}.md` | 注入 workflow.md 的块（共 6996 字节） | 24/30/21 |
 | `assets/patches/agent-{implement,check}.md` | 注入两个原生 agent 的补丁 | 8/5 |
-| `test-harness/run-regression.sh` | 回归（A–M 共 13 组） | 1092 |
+| `test-harness/run-regression.sh` | 回归（A–U 共 19 组） | 1092 |
 | `test-harness/{fake-ocr/ocr,fake-mvn/mvn,mkjava.sh,smoke_load.mjs,fixtures/}` | 假 ocr、假 mvn、Java 场景构造、plugin 加载冒烟、夹具 | — |
 | `README.md`、`test-harness/README.md`、`docs/FINAL-DEV-PLAN.md` | 文档（FINAL-DEV-PLAN 含实测数字与未验证清单） | 73/30/66 |
 
@@ -427,3 +429,40 @@ OCR：`ocrGate`、`extractFindings`、`parseTriage`、`matchEntry`、`hasCodeEvi
 | `docs/ocr命令输出.txt`（33 KB） | 真实 `ocr review --help` / `ocr llm test` 的终端原文；没有任何文件引用它；结论已写进 §2.10，行为已固化在 `test-harness/fake-ocr` 与 `fixtures/ocr/` |
 | `docs/优化进度.md` | 2026-10-14 的状态快照，已被 §2.9 / §8 取代，内容过期 |
 | `trellis-plus/docs/archive/`（v1.1 两份计划，约 95 KB） | v1.1 时代的方案，已被 v2 取代；被否决的做法与差异已在 §1.6、§3.8 记录。保留只会让 AI 读到过期设计 |
+
+## v3.1.0 会话进度（2026-11-14）
+
+**来源**：`git clone` 公开仓库（基线提交 `4cc0577`），本轮未 push，交付 zip 覆盖包。**回归基线先复现**：用真实 `npx @mindfoldhq/trellis@0.6.17 init --opencode -u regression -y` 生成 BASE，**并删掉 BASE 里的 `.git`**（带 `.git` 会让 3 条依赖「无 git / git 根在上层」的用例误失败），得到 728 / 0 / 1，与上一轮一致。
+
+### 用户确认的决定（本轮全部按默认）
+1. S 档也放开为 warn；2. 流程由门禁自动写入，AI 不手动报进度；3. CLI 叫 `trellis-plus status`，“激活”= `in_progress` + 当前会话任务，`--all` 加 `planning`；4. 编码规范随 `install` / `apply --all` 默认写入，`--no-coding-rules` 关闭。另外：**M 级不做独立设计评审**；**git hook 默认只 warn 提示**。
+
+### 本轮任务
+| 任务 | 状态 | 改动 / 证据 |
+|---|---|---|
+| 级别以人的选择为准 | 完成 | 根因：三处把 M 改回 L——`cmdTier` 拒绝、`lintPlan` error、`testGate` error，且报错写着 “raise the tier”。现在三处都是 warn（文案只陈述事实）；`cmdTier` 照写人选的级别，并在 `meta.plus_tier_suggested` / `plus_tier_override` 记建议级别（`suggestTier`：无 Service/Controller=S，≤`maxClassesM` 且单模块=M，否则 L）。单测门禁本身不依赖级别（改了 Service 没改测试仍然 error，有反例）。 |
+| M 不做设计评审 | 完成 | gate 对 M 本来就不要求；补强了 AI 可能误做的入口：`design-review` 对 S/M 输出 “skip step 1.7, do not dispatch plus-design-reviewer”；phase1 1.7 写 “S/M: skip”；`plus-design-reviewer` agent 的 Recursion Guard 加“S/M 不评审”；面包屑 “1.7 review: L only”。 |
+| hook 默认 warn | 完成 | `PROFILES.standard` 与 `light` 加 `hook: "warn"`，`strict` 仍 error；提示文案 `(hook=warn, <来源>) the checks above would block this commit; letting it through`。要拦提交：`gates.hook = "error"` 或 `profile: strict`。 |
+| task.json 流程记录 | 完成 | `meta.plus_flow = {tier, steps:[{id,name,state,at?}], current}`。步骤表 `FLOW_BY_TIER`：S 7 步、M 8 步、L 10 步。由门禁写：`tier` 建表（换档保留已完成步骤）；align→1.1、anchors→1.2、lint-plan→1.6、design-review→1.7、pre-start→1.4、`test --run`→2.4、ocr→2.5；通过则本步及之前全部 done，失败则本步及之后回 todo；gate 被关（off）或不适用时不动；**warn 模式下“本应拦截”的失败不算通过**。3.4 不由门禁写（hook 里写会弄脏工作区），CLI 按 `task.status=completed` / `commit` 非空推断。 |
+| `trellis-plus status` | 完成 | `trellis-plus.mjs` `cmdStatus`：只读 task.json，不依赖 gate.mjs。默认 `in_progress` + 会话任务（`00-bootstrap-*` 不计），`--all` 全部，`--json` 机读；显示进度条、✔ ▶ ○、建议级别。坏 JSON 在 `--all` 里报告、不致命。 |
+| AGENTS.md 编码规范 | 完成 | 资产 `assets/patches/agents-md-rules.md`（英文 6 条：Think first / Simplicity / Surgical changes / Read before write / Verify / Comments）。相对用户原稿的调整：合并重复项（9→6）；“不为不可能的异常加防御”补“系统边界仍要校验”；补“过度流程设计”；补子 agent 不能提问时的做法。写在 AGENTS.md 末尾 `<!-- trellis-plus:begin:rules -->` 块里（Trellis 自己的块之外）；幂等、`revert` 字节还原、文件不存在则创建且 revert 时删除（`manifest.createdAgentsMd`）、`doctor` 检查并 `--fix`；`update` 会给没有该选项的旧 manifest 补上（`UPDATING`）。选项 `--coding-rules` / `--no-coding-rules`，`--all` 含它。 |
+| 版本 / 文档 | 完成 | `package.json` 3.1.0；回归里两处硬编码版本改为读被测工具的 `package.json`（`TVER_RE`）。README×3、使用说明、方案介绍已同步；workflow 块体积仍 ≤7000 字节（6996），面包屑单条 ≤400 字符。 |
+
+### 验证结果（实际执行）
+- **回归**：`BASE=<无 .git 的 trellis init 输出> bash test-harness/run-regression.sh` → **819 通过 / 0 失败 / 1 跳过**（上一轮 728）。新增 S 组（流程记录，30 条）、T 组（编码规范，约 20 条）、U 组（status，约 20 条）；B/C/F/L/N/Q/R 组里原来断言“拒绝”的用例改成“保留人的选择 + warn”，并补了反例（无 `--reason` 仍失败；S 档改 Service 不改测试仍失败）。反向对照共约 195 条。
+- **反向对照（每条新规则）**：把 `cmdTier` 改回拒绝、把三处 warn 改回 error、把 `hook: "warn"` 去掉、把流程写入/复位/跳过/warn 不算通过/仅 `--run` 计入/换档保留进度各自破坏、把规范块的追加/幂等/opt-out/revert/doctor/update 默认破坏、把 status 的各过滤与显示破坏——对应断言全部失败，恢复后通过。过程中发现并修掉 2 条“无效对照”（检查的是变异前已写好的任务）和 1 个真实 bug（revert 删不掉“由 trellis-plus 创建的 AGENTS.md”，因为块正则要求前导换行）。
+- **真实 Trellis 0.6.17 端到端**：空目录 `install` → AGENTS.md 里有 1 个规则块、`doctor` 通过；真实 `update` 之后规则块仍是 1 份、Trellis 自己的块完好、`doctor` 通过。
+- 源码 sha256 前 16 位：trellis-plus.mjs `0865357f2d859311`、run-regression.sh `60d518c03b497882`、gate.mjs `14e071234cc72b9d`。
+
+### 修改时注意（新增的约束）
+- 回归的 BASE **不能带 `.git`**；`task.py create` 会把新任务设为会话任务，写 status 相关测试时要在创建完后再 `start` 目标任务；`task.py start` 在测试里要加 `--allow-empty-context`。
+- 改 `gate.mjs` 后，回归里依赖其源码字符串的变异串必须同步（本轮改过的：`writeTier(taskDir, t, reason, below ? suggested : null)`、`if (concrete.length > cfg.tiers.maxClassesM || mods.size > 1) rep.warn(`、`if (needTest.size > … ) rep.warn(`、`const passed = (r) => r.ok && !r.warnings.some(`、`recordStep(taskDir, g[1], reps.every(passed))` 等）。
+- 面包屑与 workflow 块有体积回归线（块合计 ≤7000 字节、`[plus]` 单条 ≤400 字符）；加文案前先量。
+- `grep -E` 在 C locale 下对多字节字符做 `{n}` 量词会出错，断言进度条用 `grep -F`。
+
+### 未验证 / 已知问题
+- **OpenCode 子 agent 是否会读取 AGENTS.md 未验证**（只确认了主会话机制）。若不读，规则对 trellis-implement / trellis-check 无效，需要把规则同时放进两个 agent 补丁——这需要在真实 OpenCode 里确认后再决定。
+- “规则是否真的减少过度防御/过度设计”只能靠使用观察，无法在回归里测。
+- 流程记录里“通过则之前所有步骤 done”是一种推断（比如 align 被 off 时 1.1 也会被后面的 lint-plan 带成 done）；pre-start 在 `designReview=warn`（standard 的 L 档）下通过会把 1.7 一并记成 done（视为“已豁免”）。
+- 3.4 在 hook 里不写 task.json（避免提交时弄脏工作区），只在 `status` 里推断。
+- 仍未验证：Windows、内网 npm 源；本轮没有发布到 npm。

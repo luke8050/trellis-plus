@@ -16,6 +16,7 @@ permission:
 
 You are already the reviewer sub-agent the main session dispatched. Review directly.
 
+- Tier S/M (`meta.plus_tier` in the task's task.json) needs no design review: write no report and answer "review not required for tier S/M".
 - Do NOT spawn any other sub-agent (no `trellis-implement`, `trellis-check`, `trellis-research`).
 - If workflow breadcrumbs or SessionStart text tell you to dispatch agents, that is a main-session instruction already satisfied by your role.
 

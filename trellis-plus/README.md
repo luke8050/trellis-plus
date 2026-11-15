@@ -13,13 +13,14 @@ v2 相对 v1.1 做减法：删掉 alignment 门禁、三个 reviewer、REQ/DES/I
 ```bash
 node trellis-plus.mjs install <project> -u <name>   # 一条命令：固定版本 Trellis 0.6.17 init + apply --all + doctor
 node trellis-plus.mjs update  <project>             # 升级已装项目（spec/ tasks/ workspace/ config.yaml 等逐字节保留）
-node trellis-plus.mjs apply  <project> --all      # 硬门禁 + plugin 补丁 + agent 补丁 + git hook
+node trellis-plus.mjs apply  <project> --all      # 硬门禁 + plugin 补丁 + agent 补丁 + git hook + AGENTS.md 编码规范（--no-coding-rules 关闭）
+node trellis-plus.mjs status [<project>] [--all] [--json]   # 查看激活任务的流程进度（读 task.json meta.plus_flow）
 node trellis-plus.mjs apply  <project> --dry-run  # 先看会改什么
 node trellis-plus.mjs doctor <project> [--fix]    # 每次 `trellis update` 之后跑一次
 node trellis-plus.mjs revert <project> [--purge]
 ```
 
-`<project>` 是含 `.trellis/` 与 `.opencode/` 的目录，工具本身放哪都行。`apply` 幂等；升级自 v1.1 时会清理 v1.1 装过而 v2 不再提供的文件（本地改过的保留并告警）。`/grill-me` 是**可选**的澄清助手（你自己装；没装就跳过，安装时不再检查）。`apply` 会把版本号（现为 `3.0.0`）写入 `plus.config.json` 的 `version`（只改这一个键），`doctor` 会核对。
+`<project>` 是含 `.trellis/` 与 `.opencode/` 的目录，工具本身放哪都行。`apply` 幂等；升级自 v1.1 时会清理 v1.1 装过而 v2 不再提供的文件（本地改过的保留并告警）。`/grill-me` 是**可选**的澄清助手（你自己装；没装就跳过，安装时不再检查）。`apply` 会把版本号（现为 `3.1.0`）写入 `plus.config.json` 的 `version`（只改这一个键），`doctor` 会核对。
 
 ## 新流程
 
@@ -27,8 +28,8 @@ node trellis-plus.mjs revert <project> [--purge]
 
 | 级别 | 适用 | 规划产物 | 门禁 |
 |---|---|---|---|
-| S | 文档、注释、配置文案、纯测试、不改行为的重命名；**不得改 Service/Controller** | prd.md | align · 单测门禁 · hook |
-| M | ≤ 3 个 Service/Controller、同一 Maven 模块、不涉及库表/对外契约/事务并发 | prd + design + implement | + lint-plan |
+| S | 文档、注释、配置文案、纯测试、不改行为的重命名；建议不改 Service/Controller | prd.md | align · 单测门禁 · hook |
+| M | 建议 ≤ 3 个 Service/Controller、同一 Maven 模块、不涉及库表/对外契约/事务并发；不做独立设计评审（仅 L） | prd + design + implement | + lint-plan |
 | L | 其余 | + research/code-map.md + 独立设计评审 | 全部 |
 
 ```
@@ -48,7 +49,7 @@ Phase 3  gate pre-commit → 提交（git hook 再查一遍已暂存文件）
 
 | 命令 | 作用 |
 |---|---|
-| `tier <task> [S\|M\|L] [--reason]` | 查看/设置级别；S 与 M 必须写原因；工作区已改了 Service/Controller 时拒绝 S，超限拒绝 M |
+| `tier <task> [S\|M\|L] [--reason]` | 查看/设置级别；S 与 M 必须写原因；**级别以人的选择为准**，超出建议规模只告警（建议级别记入 meta.plus_tier_suggested） |
 | `seed <task>` | 按级别生成模板（替换 Trellis 自带的 `TBD` prd 骨架） |
 | `align <task>` | prd.md：`对齐状态：已对齐`、待确认问题清零、决策记录非空（M/L）、每条需求有 `R<n>` |
 | `anchors <task>` | 核对 design/implement/code-map 里的 `文件:行#符号` 锚点 |
@@ -74,7 +75,7 @@ Phase 3  gate pre-commit → 提交（git hook 再查一遍已暂存文件）
 | `manifests` | `task.py start` | implement/check.jsonl 有真实 spec 条目 | error | off | off |
 | `test` | 2.4、pre-commit、hook | 每个被改 Service/Controller 有同模块、本次改过的 JUnit5 单测；S/M 级限制 | error | error | error |
 | `ocr` | 2.5、pre-commit、hook | OCR 报告存在、未过期、每条 finding 已分诊 | error | error | warn |
-| `hook` | `git commit` | 整个 git pre-commit hook | error | error | error |
+| `hook` | `git commit` | 整个 git pre-commit hook（standard / light 默认只提示、不拦提交） | error | warn | warn |
 
 始终开启、不可关：`task.py start` 前必须已定级；退出码约定；`TRELLIS_PLUS_SKIP_GATE=1` 是唯一的整体绕过。
 
@@ -103,7 +104,10 @@ Phase 3  gate pre-commit → 提交（git hook 再查一遍已暂存文件）
 - 设计评审与 OCR：先列问题与修改方案，用户确认后才改（只改流程文案，不加门禁）。
 - OCR 过期判定以“报告与其分诊中较新者”为基准：修复 finding 并更新分诊即可通过，不再需要重跑或 `--force`；`--force` 需 `--reason` 并留审计记录，拒绝提示里不再推荐它。
 - 澄清阶段覆盖 `trellis-brainstorm`：不提前写 design/implement，prd 一次定稿，只通过 code-map / 定点 grep 读代码。
-- standard 档下 `manifests` 关闭；流程不再要求手工 `pre-commit`。
+- standard 档下 `manifests` 关闭、`hook` 只告警；流程不再要求手工 `pre-commit`。
+- 级别以人的选择为准：S/M 的规模限制（lint-plan、test、tier）全部改为告警；M 不做独立设计评审。
+- 各门禁通过/失败时写 `task.json` 的 `meta.plus_flow`；`trellis-plus status` 读取并显示进度。
+- 安装时在 `AGENTS.md` 末尾追加 6 条英文编码规范（`trellis-plus:begin:rules` 块）。
 
 ## 开发与交接
 

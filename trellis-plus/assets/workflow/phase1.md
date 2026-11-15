@@ -8,7 +8,7 @@ Preconditions: tier M/L, `GATE align {TASK_DIR}` passes; L: `research/code-map.m
 
 #### 1.7 Design review `[required · L · repeatable, max 2 rounds]`
 
-Runs after 1.6 passes, in a fresh session.
+S/M: skip. L: after 1.6 passes, in a fresh session.
 
 [Claude Code, Cursor, OpenCode, codex-sub-agent, Kiro, Gemini, Qoder, CodeBuddy, Copilot, Droid, Pi, Oh My Pi, ZCode, Snow, Reasonix, Trae, Grok, Kimi Code]
 

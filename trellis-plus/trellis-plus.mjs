@@ -15,14 +15,18 @@
  *                                          upgrade an installed project: pinned `trellis update --force` + apply (previous options) + doctor;
  *                                          your spec/ tasks/ workspace/ .developer .current-task config.yaml are kept byte for byte
  *   node trellis-plus.mjs apply  <project> [--dry-run] [--hard-gate] [--patch-plugin] [--tune-context]
- *                                          [--patch-agents] [--git-hook] [--all] [--force]
+ *                                          [--patch-agents] [--git-hook] [--coding-rules] [--all] [--force]
+ *                                          (--all includes the coding rules in AGENTS.md; --no-coding-rules leaves them out / removes them)
+ *   node trellis-plus.mjs status [<project>] [--all] [--json]
+ *                                          workflow progress of the active (in_progress) tasks, read from task.json meta.plus_flow;
+ *                                          --all = every task, --json = machine readable
  *   node trellis-plus.mjs doctor <project> [--fix]
  *   node trellis-plus.mjs revert <project> [--purge]
  *   node trellis-plus.mjs -h | --help
  *
  * <project> = the directory that contains .trellis/ and .opencode/ (defaults to the current directory;
  * `--root <project>` is accepted as an alias). Run it after `trellis init` / `trellis update`.
- * `--all` = hard gate + plugin patch + agent patch + git hook (it rewrites .git/hooks/pre-commit and two agent files).
+ * `--all` = hard gate + plugin patch + agent patch + git hook + coding rules (it rewrites .git/hooks/pre-commit, two agent files and appends a block to AGENTS.md).
  *
  * apply is idempotent. Re-run it (or `doctor --fix`) after every `trellis update`, because update may
  * replace workflow.md / task.py / plugin files / agent files that this tool patches.
@@ -71,6 +75,8 @@ const rootArg = opt("root") ?? positional[0] ?? process.cwd()
 const ROOT = resolve(rootArg)
 const DRY = flag("dry-run")
 const FORCE = flag("force")
+const NO_RULES = flag("no-coding-rules")
+let UPDATING = false // update: a manifest from before the coding rules existed counts as "on"
 let ALL = flag("all") || command === "install" // install always applies the full set (update decides in cmdUpdate)
 let FORCE_MANAGED = false // update: overwrite trellis-plus managed files (backed up) except under .trellis/spec/
 
@@ -189,7 +195,7 @@ const blockRe = (n) => new RegExp(`${BEGIN(n)}[\\s\\S]*?${END(n)}\\n\\n`)
 // Per-turn text: each [plus] line is injected on EVERY turn, so keep the lines of one block under ~400 characters in total.
 const BREADCRUMBS = {
   planning: [
-    "[plus] Tier first (user chooses): `node ./.trellis/plus/gate.mjs tier <TASK_DIR> S|M|L --reason \"…\"`. Overrides trellis-brainstorm: no design.md/implement.md now (1.6 writes them, new session); read code via code-map/grep only. M/L: suggest /grill-me (skip if absent), record D<n> in prd.md (or `无：原因`), `gate.mjs align`. 1.6 draft → `lint-plan`; L: 1.7 review. `gate.mjs status <TASK_DIR>` = next.",
+    "[plus] Tier first (user chooses): `node ./.trellis/plus/gate.mjs tier <TASK_DIR> S|M|L --reason \"…\"`. Overrides trellis-brainstorm: no design.md/implement.md now (1.6, new session); read code via code-map/grep only. M/L: suggest /grill-me (skip if absent), record D<n> in prd.md (or `无：原因`), `gate.mjs align`. 1.6 draft → `lint-plan`; 1.7 review: L only. `gate.mjs status <TASK_DIR>` = next.",
   ],
   in_progress: [
     "[plus] After trellis-check: 2.4 `node ./.trellis/plus/gate.mjs test --task <TASK_DIR> --run`, then 2.5 `gate.mjs ocr --task <TASK_DIR> --run`. List findings + proposed fixes, edit only after the user confirms; triage each (critical/high: fix, or false-positive with `path:line`); rerun only to verify critical/high fixes (max 2; no --force without the user). Commit: the git hook re-checks.",
@@ -348,6 +354,35 @@ function unpatchAgents() {
   }
 }
 
+// ───────────── coding rules in AGENTS.md (--coding-rules, part of --all) ─────────────
+
+const RULES_FILE = "AGENTS.md"
+const RULES_RE = new RegExp(`(?:\\n)?${BEGIN("rules")}\\n[\\s\\S]*?\\n${END("rules")}\\n`)
+const rulesBlock = () => `\n${BEGIN("rules")}\n${readFileSync(join(ASSETS, "patches", "agents-md-rules.md"), "utf8").trimEnd()}\n${END("rules")}\n`
+
+/** Appends (or refreshes) a managed block at the END of AGENTS.md, outside Trellis's own block, so `trellis update` leaves it alone and revert is byte-exact. */
+function patchRules(manifest) {
+  const t = readRel(RULES_FILE)
+  const block = rulesBlock()
+  if (t === null) { writeRel(RULES_FILE, block.slice(1)); manifest.createdAgentsMd = true; log.ok(`${RULES_FILE} created with the coding rules`); return true }
+  if (RULES_RE.test(t)) {
+    const nt = t.replace(RULES_RE, () => block)
+    if (nt !== t) { writeIf(RULES_FILE, nt); log.ok(`${RULES_FILE}: coding rules updated`) }
+    return true
+  }
+  writeIf(RULES_FILE, (t.endsWith("\n") ? t : t + "\n") + block)
+  log.ok(`${RULES_FILE}: coding rules added`)
+  return true
+}
+const rulesPatched = () => (readRel(RULES_FILE) ?? "").includes(rulesBlock().slice(1))
+function unpatchRules(manifest) {
+  const t = readRel(RULES_FILE)
+  if (t === null || !RULES_RE.test(t)) return
+  const nt = t.replace(RULES_RE, "")
+  if (manifest?.createdAgentsMd && nt.trim() === "") { if (!DRY) rmSync(abs(RULES_FILE)); log.ok(`${RULES_FILE} removed (trellis-plus had created it)`); return }
+  writeIf(RULES_FILE, nt); log.ok(`${RULES_FILE}: coding rules removed`)
+}
+
 // ───────────── git pre-commit hook (--git-hook) ─────────────
 
 const HOOK_BEGIN = "# >>> trellis-plus >>>"
@@ -487,6 +522,7 @@ function cmdApply() {
     tuneContext: flag("tune-context") || !!prev.tuneContext, // not part of --all: v2 documents (<= 60 KB together) fit the default injection limits
     patchAgents: ALL || flag("patch-agents") || !!prev.patchAgents,
     gitHook: ALL || flag("git-hook") || !!prev.gitHook,
+    codingRules: !NO_RULES && (ALL || flag("coding-rules") || prev.codingRules === true || (UPDATING && prev.codingRules === undefined)),
   }
   installFiles(manifest)
   stampVersion()
@@ -496,6 +532,9 @@ function cmdApply() {
   if (opts.tuneContext) good = patchConfig() && good
   if (opts.patchAgents) good = patchAgents() && good; else log.info("agent prompts untouched (add --patch-agents so trellis-implement/trellis-check always get the unit-test rules)")
   if (opts.gitHook) good = installHook(manifest) && good; else log.info("git hook not installed (add --git-hook for the commit-time safety net)")
+  if (opts.codingRules) good = patchRules(manifest) && good
+  else if (NO_RULES) unpatchRules(manifest)
+  else log.info("coding rules not written to AGENTS.md (add --coding-rules)")
   manifest.version = TOOL_VERSION
   manifest.options = opts
   if (!DRY) writeRel(P.manifest, JSON.stringify(manifest, null, 2) + "\n")
@@ -530,6 +569,7 @@ function cmdDoctor() {
   if (o.patchPlugin && !(readRel(P.ctxjs) ?? "").includes(CTX_NEW)) problems.push("trellis-context.js patch missing")
   if (o.tuneContext && !CFG_RE.test(readRel(P.config) ?? "")) problems.push("config.yaml context_injection block missing")
   if (o.patchAgents && !agentsPatched()) problems.push("trellis-implement / trellis-check plus block missing (trellis update replaced it?)")
+  if (o.codingRules && !rulesPatched()) problems.push("AGENTS.md coding-rules block missing or outdated (trellis update replaced it?)")
   if (o.gitHook) {
     const st = hookState()
     if (st === "missing") problems.push("git pre-commit hook missing or outdated")
@@ -820,6 +860,7 @@ function cmdUpdate() {
   const prev = manifest.options ?? {}
   if (!ALL && !Object.values(prev).some(Boolean)) { ALL = true; log.info("no previous trellis-plus options recorded — applying the full set") }
   FORCE_MANAGED = true
+  UPDATING = true
   const a = cmdApply()
   if (a !== 0) { log.err("apply failed — fix the problems above, then re-run `update` or `doctor --fix`"); return a }
 
@@ -836,12 +877,58 @@ function cmdUpdate() {
 function cmdRevert() {
   console.log("trellis-plus revert")
   const m0 = loadManifest()
-  unpatchWorkflow(); unpatchTaskPy(); unpatchPlugin(); unpatchConfig(); unpatchAgents(); uninstallHook(m0)
+  unpatchWorkflow(); unpatchTaskPy(); unpatchPlugin(); unpatchConfig(); unpatchAgents(); unpatchRules(m0); uninstallHook(m0)
   if (flag("purge")) {
     const m = loadManifest()
     for (const rel of Object.keys(m.files)) if (!rel.endsWith("plus.config.json") && exists(rel)) { if (!DRY) { rmSync(abs(rel)); pruneEmptyDirs(dirname(rel)) } log.ok(`removed ${rel}`) }
     if (!DRY) rmSync(abs(P.manifest), { force: true })
   } else log.info("new files (agents, skills, gate, templates, guides) kept; add --purge to delete them")
+  return 0
+}
+
+// ───────────── status: workflow progress of the active tasks (reads task.json meta.plus_flow, written by the gates) ─────────────
+
+function currentTaskName() {
+  const r = spawnSync("python3", [abs(".trellis/scripts/task.py"), "current", "--json"], { cwd: ROOT, encoding: "utf8" })
+  if (r.status !== 0 || !r.stdout) return null
+  try { const j = JSON.parse(r.stdout); const ct = j.current_task; const p = (ct && typeof ct === "object" ? ct.dir : ct) || j.task_path || j.path || j.task; return typeof p === "string" && p ? p.replace(/\/+$/, "").split("/").pop() : null } catch { return null }
+}
+function taskView(name, data, current) {
+  const m = data.meta && typeof data.meta === "object" ? data.meta : {}
+  const f = m.plus_flow && Array.isArray(m.plus_flow.steps) ? m.plus_flow : null
+  const finished = data.status === "completed" || data.status === "archived"
+  const steps = f ? f.steps.map((x) => ({ id: x.id, name: x.name, done: finished || x.state === "done" || (x.id === "3.4" && !!data.commit) })) : []
+  const cur = steps.find((x) => !x.done)?.id ?? null
+  return { task: name, title: data.title ?? name, status: data.status ?? "?", isCurrent: name === current, tier: typeof m.plus_tier === "string" ? m.plus_tier : null, suggested: m.plus_tier_suggested ?? null, reason: m.plus_tier_reason ?? "", flow: !!f, steps, current: cur }
+}
+function renderTask(v) {
+  const out = []
+  const tier = v.tier ? `tier ${v.tier}${v.suggested ? ` (suggested ${v.suggested}, your choice is kept)` : ""}` : "tier not set"
+  out.push(`${v.isCurrent ? "*" : " "} ${v.task}   ${v.status}   ${tier}`)
+  if (v.reason) out.push(`    reason: ${v.reason}`)
+  if (!v.flow) { out.push(v.tier ? "    no flow record yet — it is written when a gate runs (node .trellis/plus/gate.mjs status <task>)" : "    choose the tier first: node .trellis/plus/gate.mjs tier <task> S|M|L --reason \"…\""); return out }
+  const done = v.steps.filter((x) => x.done).length
+  out.push(`    [${"█".repeat(done)}${"░".repeat(v.steps.length - done)}] ${done}/${v.steps.length}${v.current ? `   next: ${v.current} ${v.steps.find((x) => x.id === v.current).name}` : "   all steps done"}`)
+  for (const x of v.steps) out.push(`    ${x.done ? "✔" : x.id === v.current ? "▶" : "○"} ${x.id.padEnd(4)} ${x.name}`)
+  return out
+}
+function cmdStatus() {
+  if (!exists(".trellis")) { console.error(`not a Trellis project: ${ROOT} (no .trellis/ directory)`); return 2 }
+  const dir = abs(".trellis/tasks")
+  const current = currentTaskName()
+  const all = flag("all")
+  const views = []
+  for (const name of existsSync(dir) ? readdirSync(dir).sort() : []) {
+    if (name === "archive" || !existsSync(join(dir, name, "task.json"))) continue
+    let data
+    try { data = JSON.parse(readFileSync(join(dir, name, "task.json"), "utf8")) } catch { if (all) views.push({ task: name, title: name, status: "invalid task.json", isCurrent: false, tier: null, suggested: null, reason: "", flow: false, steps: [], current: null }); continue }
+    if (!all && (/^00-bootstrap/.test(name) || !(data.status === "in_progress" || name === current))) continue
+    views.push(taskView(name, data, current))
+  }
+  if (flag("json")) { console.log(JSON.stringify(views, null, 2)); return 0 }
+  if (views.length === 0) { console.log(`no active tasks in ${ROOT}${all ? "" : "  (--all lists every task)"}`); return 0 }
+  console.log(`trellis-plus status — ${ROOT}${all ? "  (all tasks)" : "  (active tasks)"}`)
+  for (const v of views) { console.log(""); console.log(renderTask(v).join("\n")) }
   return 0
 }
 
@@ -858,5 +945,5 @@ function help() {
   return 0
 }
 
-const code = HELP ? help() : ({ install: cmdInstall, update: cmdUpdate, apply: cmdApply, doctor: cmdDoctor, revert: cmdRevert, help }[command]?.() ?? (console.error(`unknown command: ${command}`), 2))
+const code = HELP ? help() : ({ install: cmdInstall, update: cmdUpdate, apply: cmdApply, doctor: cmdDoctor, revert: cmdRevert, status: cmdStatus, help }[command]?.() ?? (console.error(`unknown command: ${command}`), 2))
 process.exit(code)

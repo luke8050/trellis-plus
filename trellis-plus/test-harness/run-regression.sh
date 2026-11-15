@@ -22,6 +22,7 @@ BASE="${BASE:?set BASE=/path/to/a/trellis-initialized/project}"
 BASE="$(cd "$BASE" && pwd)" || { echo "BASE is not a directory: $BASE" >&2; exit 2; }   # absolute: the suite cd's around, a relative BASE breaks every group after the first
 WORK="$(mktemp -d /tmp/plus-reg.XXXXXX)"
 export TRELLIS_CONTEXT_ID=plusreg
+TVER="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$TOOL/package.json")"; TVER_RE="${TVER//./\\.}"   # the tool version, read from the tool under test
 # BASE from git has no .trellis/.developer (gitignored): task.py create needs one
 export TRELLIS_DEVELOPER="${TRELLIS_DEVELOPER:-regression}"
 unset TRELLIS_PLUS_TASK TRELLIS_PLUS_SKIP_GATE
@@ -301,6 +302,13 @@ assert "status" in d and "title" in d, "other task.json keys lost"
 print("meta.plus_tier =", d["meta"]["plus_tier"])
 PY
 }
+meta_sugg() { python3 - "$1" <<'PY'
+import json, sys
+m = json.load(open(sys.argv[1], encoding="utf8")).get("meta", {})
+print("tier=%s suggested=%s override=%s" % (m.get("plus_tier"), m.get("plus_tier_suggested"), m.get("plus_tier_override")))
+PY
+}
+meta_sugg_after() { $G tier "$1" M --reason "human chose M" >/dev/null 2>&1; meta_sugg "$W/$1/task.json"; }
 check "a new task has no tier" 0 "not set" $G tier "$T"
 check "seed refuses without a tier" 1 "set the tier first" $G seed "$T"
 check "align refuses without a tier" 1 "task has no tier" $G align "$T"
@@ -327,22 +335,31 @@ check "...and really stores tier S" 0 "meta.plus_tier = S" meta_is "$W/$T5/task.
 # refusals depend on the working tree
 echo "// edit" >> src/main/java/com/acme/OrderService.java
 T6="$(newtask "$W" t6)"
-check "tier S is refused while a Service/Controller is changed" 1 "tier S refused" $G tier "$T6" S --reason "claims to be small"
+check "tier S is kept while a Service/Controller is changed (a warning, no refusal: the human decides)" 0 "tier S set" $G tier "$T6" S --reason "human chose S"
+has "...with a warning that names the suggested tier" "WARN  tier S is below the suggested M"
+check "...the human's tier is what is stored, the suggestion sits next to it" 0 "tier=S suggested=M override=True" meta_sugg "$W/$T6/task.json"
 check "tier M is accepted for 1 changed Service" 0 "tier M set" $G tier "$T6" M --reason "one service only"
+check "...no suggestion is kept when the tier is not below it" 0 "tier=M suggested=None override=None" meta_sugg "$W/$T6/task.json"
 check "tier L is always accepted" 0 "tier L set" $G tier "$T6" L
 for n in A B C D; do printf 'package com.acme;\npublic class %sService { public int f() { return 1; } }\n' $n > src/main/java/com/acme/${n}Service.java; done
-check "tier M is refused for more than 3 Service/Controller files" 1 "tier M refused .*limit 3" $G tier "$T6" M --reason "four services"
+check "tier M is kept for more than 3 Service/Controller files (warning: suggested L)" 0 "tier M set" $G tier "$T6" M --reason "human chose M"
+has "...the warning names the suggested tier and the size rule" "WARN  tier M is below the suggested L: 5 Service/Controller file\(s\) in 1 module\(s\)"
+check "...stored as M with suggestion L" 0 "tier=M suggested=L override=True" meta_sugg "$W/$T6/task.json"
+hasnt "...and nothing tells the AI to use another tier" "Use L|Use M|refused"
 git checkout -q -- . ; git clean -fdq src; mkdir -p mod-a/src/main/java/x mod-b/src/main/java/x; echo "<project/>" > mod-a/pom.xml; echo "<project/>" > mod-b/pom.xml
 printf 'package x;\npublic class AService { public int f() { return 1; } }\n' > mod-a/src/main/java/x/AService.java
 printf 'package x;\npublic class BService { public int f() { return 1; } }\n' > mod-b/src/main/java/x/BService.java
-check "tier M is refused when the change spans 2 Maven modules" 1 "2 module\(s\)" $G tier "$T6" M --reason "two modules"
+check "tier M is kept when the change spans 2 Maven modules (warning)" 0 "suggested L: 2 Service/Controller file\(s\) in 2 module\(s\)" $G tier "$T6" M --reason "two modules, human chose M"
 rm -rf mod-a mod-b
 # reverse controls
 echo "// edit" >> src/main/java/com/acme/OrderService.java
-reverse "tier S refusal" 1 'if (t === "S" && sc.length) {' 'if (false) {' chk 1 "tier S refused" $G tier "$T6" S --reason "claims to be small"
+reverse "the human's tier S is kept, not refused" 1 '  writeTier(taskDir, t, reason, below ? suggested : null)' '  if (below) return 1; writeTier(taskDir, t, reason, below ? suggested : null)' chk 0 "tier S set" $G tier "$T6" S --reason "human chose S"
 git checkout -q -- .
 for n in A B C D; do printf 'package com.acme;\npublic class %sService { public int f() { return 1; } }\n' $n > src/main/java/com/acme/${n}Service.java; done
-reverse "tier M class limit" 1 'if (sc.length > cfg.tiers.maxClassesM || mods.size > 1) {' 'if (false) {' chk 1 "tier M refused" $G tier "$T6" M --reason "four services"
+reverse "the human's tier M is kept above the suggested size" 1 '  writeTier(taskDir, t, reason, below ? suggested : null)' '  if (below) return 1; writeTier(taskDir, t, reason, below ? suggested : null)' chk 0 "tier M set" $G tier "$T6" M --reason "human chose M"
+reverse "the suggestion is recorded next to the tier" 1 'below ? suggested : null)
+  console.log(' 'null)
+  console.log(' chk 0 "suggested=L override=True" meta_sugg_after "$T6"
 git clean -fdq src
 reverse "reason required for S/M" 1 'if (t !== "L" && reason.length < 6) fail2(' 'if (false) fail2(' chk 2 "needs --reason" $G tier "$T" S
 reverse "seed needs a tier" 1 'if (ti.unset) { rep.error("set the tier first' 'if (false) { rep.error("set the tier first' chk 1 "set the tier first" $G seed "$(newtask "$W" t7)"
@@ -674,10 +691,12 @@ fill "$TM" M; python3 - "$W/$TM/implement.md" <<'PY'
 import sys
 f = sys.argv[1]; s = open(f, encoding="utf8").read()
 extra = "".join("\n### 步骤 %d：%sService\n\n- 文件：`src/main/java/com/acme/%sService.java`\n- 改什么：新增查询\n" % (i + 3, n, n) for i, n in enumerate("ABCD"))
-open(f, "w", encoding="utf8").write(s.replace("\n## 2 测试矩阵", extra + "\n## 2 测试矩阵"))
+rows = "".join("| R1 | %sServiceTest | f_%s | %s |\n" % (n, k, t) for n in "ABCD" for k, t in (("ok", "正常"), ("edge", "边界"), ("bad", "异常")))
+open(f, "w", encoding="utf8").write(s.replace("\n## 2 测试矩阵", extra + "\n## 2 测试矩阵").replace("\n## 3 测试豁免", rows + "\n## 3 测试豁免"))
 PY
-check "M: more than 3 Service/Controller classes in the plan fails" 1 "tier M allows at most 3 Service/Controller classes" $G lint-plan "$TM"
-reverse "M class limit in the plan" 1 'if (needTest.size > cfg.tiers.maxClassesM || mods.size > 1) rep.error(`tier M allows' 'if (false) rep.error(`tier M allows' chk 1 "tier M allows at most" $G lint-plan "$TM"
+check "M: more than 3 Service/Controller classes in the plan only warns (the human chose M)" 0 "WARN  tier M \(your choice, kept\) covers 6 Service/Controller class\(es\) in 1 module\(s\)" $G lint-plan "$TM"
+hasnt "...and never says to raise the tier" "raise the tier"
+reverse "M size in the plan is a warning, not an error" 1 'if (needTest.size > cfg.tiers.maxClassesM || mods.size > 1) rep.warn(' 'if (needTest.size > cfg.tiers.maxClassesM || mods.size > 1) rep.error(' chk 0 "your choice, kept" $G lint-plan "$TM"
 rm -f "$W"/src/main/java/com/acme/[ABCD]Service.java
 # tier S
 TSx="$(newtask "$W" lps)"; $G tier "$TSx" S --reason "docs only change" >/dev/null; cp "$SAMPLE/prd.md" "$W/$TSx/prd.md"
@@ -972,18 +991,21 @@ git checkout -q -- .
 
 # tier limits in the test gate
 TS="$(newtask "$W" tgs)"; $G tier "$TS" S --reason "docs only change" >/dev/null; echo "// s" >> src/main/java/com/acme/OrderService.java; echo "// t" >> src/test/java/com/acme/OrderServiceTest.java
-check "tier S + a changed Service fails even with a test" 1 "task is tier S .*changes 1 Service/Controller" $G test --task "$TS"; has "...and says how to raise the tier" "gate tier <task> M\|L"
-reverse "tier S forbids Service/Controller changes" 1 'if (ti.tier === "S") rep.error(' 'if (false) rep.error(' chk 1 "task is tier S" $G test --task "$TS"
+check "tier S + a changed Service with its test passes with a warning (the human's tier is kept)" 0 "WARN  task is tier S .*changes 1 Service/Controller" $G test --task "$TS"
+has "...the warning says the choice is kept" "tier S is your choice and is kept"
+hasnt "...and does not tell the AI to raise the tier" "raise it"
+reverse "tier S in the test gate is a warning, not an error" 1 'if (ti.tier === "S") rep.warn(' 'if (ti.tier === "S") rep.error(' chk 0 "WARN  task is tier S" $G test --task "$TS"
+git checkout -q -- src/test; check "tier S does not relax the unit-test rule: a changed Service without a changed test still fails" 1 "was not added/modified in this change" $G test --task "$TS"; echo "// t" >> src/test/java/com/acme/OrderServiceTest.java
 TLw="$(newtask "$W" tgw)"; echo "x" > "$W/$TLw/.plus-lightweight"
-check "legacy .plus-lightweight is enforced the same way" 1 "task is marked lightweight" $G test --task "$TLw"
+check "legacy .plus-lightweight is treated the same way (warning)" 0 "WARN  task is marked lightweight" $G test --task "$TLw"
 TMt="$(newtask "$W" tgm)"; $G tier "$TMt" M --reason "single service change" >/dev/null
 check "tier M + 1 changed Service with a test passes" 0 "ok  src/main/java/com/acme/OrderService.java" $G test --task "$TMt"
 git checkout -q -- .
 for n in A B C D; do printf 'package com.acme;\npublic class %sService {\n    public int f() {\n        return 1;\n    }\n}\n' $n > src/main/java/com/acme/${n}Service.java; printf 'package com.acme;\nimport org.junit.jupiter.api.Test;\nclass %sServiceTest { @Test void f_ok() { new %sService().f(); } }\n' $n $n > src/test/java/com/acme/${n}ServiceTest.java; done
 git add -A >/dev/null 2>&1; git -c user.email=a@b -c user.name=t commit -qm four --no-verify >/dev/null 2>&1
 for n in A B C D; do sedi 's/return 1;/return 2;/' src/main/java/com/acme/${n}Service.java; echo "// t" >> src/test/java/com/acme/${n}ServiceTest.java; done
-check "tier M + 4 changed Services fails" 1 "tier M allows at most 3 Service/Controller classes in one module; this change has 4" $G test --task "$TMt"
-reverse "tier M class limit in the test gate" 1 'if (concrete.length > cfg.tiers.maxClassesM || mods.size > 1) rep.error(' 'if (false) rep.error(' chk 1 "tier M allows at most 3" $G test --task "$TMt"
+check "tier M + 4 changed Services (each with its test) passes with a warning (the human's tier is kept)" 0 "WARN  tier M \(your choice, kept\): this change has 4 Service/Controller class\(es\) in 1 module\(s\)" $G test --task "$TMt"
+reverse "tier M size in the test gate is a warning, not an error" 1 'if (concrete.length > cfg.tiers.maxClassesM || mods.size > 1) rep.warn(' 'if (concrete.length > cfg.tiers.maxClassesM || mods.size > 1) rep.error(' chk 0 "your choice, kept" $G test --task "$TMt"
 TLt="$(newtask "$W" tgl)"; $G tier "$TLt" L >/dev/null
 check "tier L has no class limit" 0 "ok  src/main/java/com/acme/DService.java" $G test --task "$TLt"
 git checkout -q -- .; git clean -fdq src
@@ -1054,8 +1076,8 @@ cp "$WORK/j.cfg" .trellis/plus/plus.config.json
 git checkout -q -- . ; git clean -fdq -e .trellis -- . >/dev/null 2>&1
 TMm="$(newtask "$W" mmm)"; check "tier M can be set on a clean tree" 0 "tier M set" $G tier "$TMm" M --reason "small change"
 echo "// e" >> svc-a/src/main/java/x/AService.java; echo "// e" >> svc-a/src/test/java/x/AServiceTest.java; echo "// e" >> svc-b/src/main/java/x/BService.java; echo "// e" >> svc-b/src/test/java/x/BServiceTest.java
-check "tier M: one class per module in 2 modules is still refused" 1 "tier M allows at most 3 Service/Controller classes in one module; this change has 2 in 2 module" $G test --task "$TMm"
-reverse "tier M is single-module" 1 '|| mods.size > 1) rep.error(`tier M allows at most ${cfg.tiers.maxClassesM} Service/Controller classes in one module; this change' '|| false) rep.error(`tier M allows at most ${cfg.tiers.maxClassesM} Service/Controller classes in one module; this change' chk 1 "in 2 module" $G test --task "$TMm"
+check "tier M: one class per module in 2 modules passes with a warning (the human's tier is kept)" 0 "WARN  tier M \(your choice, kept\): this change has 2 Service/Controller class\(es\) in 2 module\(s\)" $G test --task "$TMm"
+reverse "tier M module count is reported" 1 'if (concrete.length > cfg.tiers.maxClassesM || mods.size > 1) rep.warn(' 'if (concrete.length > cfg.tiers.maxClassesM || false) rep.warn(' chk 0 "in 2 module" $G test --task "$TMm"
 unset FAKE_MVN_LOG
 fi
 
@@ -1315,6 +1337,17 @@ class OrderControllerTest { @Test void post_ok() {} }
 X
 sedi 's/void helperOnly() {}/@org.junit.jupiter.api.Test void left_ok() {}/' src/test/java/com/acme/StockServiceTest.java
 git add -A >/dev/null 2>&1; git -c user.email=a@b -c user.name=t commit -qm complete --no-verify >/dev/null 2>&1
+# default profile (standard): the hook only warns. Everything below that tests BLOCKING runs with gates.hook=error (committed, so `git checkout -- .` keeps it)
+echo "// x" >> src/main/java/com/acme/OrderService.java; git add src
+check "default profile: the hook only warns — an untested source change is let through" 0 "\(hook=warn, profile standard\) the checks above would block this commit" $G pre-commit --hook
+has "...and still prints what is wrong" "was not added/modified in this change"
+reverse "the standard profile makes the hook warn" 1 'standard: { designReview: "warn", manifests: "off", hook: "warn" }' 'standard: { designReview: "warn", manifests: "off" }' chk 0 "hook=warn, profile standard" $G pre-commit --hook
+git reset -q; git checkout -q -- .
+python3 - "$W/.trellis/plus/plus.config.json" <<'PY3'
+import json, sys
+f = sys.argv[1]; d = json.load(open(f, encoding="utf8")); d.setdefault("gates", {})["hook"] = "error"; json.dump(d, open(f, "w", encoding="utf8"), indent=2)
+PY3
+git add -A >/dev/null 2>&1; gc -m hook-error
 export FAKE_OCR_FINDINGS_FILE="$HERE/fixtures/ocr/findings-high-low.json"
 gcm() { git -c user.email=a@b -c user.name=t commit -q -m "$1" 2>&1; }          # a real commit: the hook runs
 stage_ok() { echo "// $RANDOM" >> src/main/java/com/acme/OrderService.java; echo "// $RANDOM" >> src/test/java/com/acme/OrderServiceTest.java; git add src; }
@@ -1378,6 +1411,10 @@ git reset -q; git checkout -q -- .
 # the project below the git root: the hook path is relative to the repository top
 R="$WORK/l8"; rm -rf "$R"; mkdir -p "$R"; cp -r "$BASE" "$R/proj"; ( cd "$R" && git init -q . && git add -A >/dev/null 2>&1 && gc -m init )
 node "$TOOL/trellis-plus.mjs" apply "$R/proj" --git-hook >/dev/null 2>&1
+python3 - "$R/proj/.trellis/plus/plus.config.json" <<'PY3'
+import json, sys
+f = sys.argv[1]; d = json.load(open(f, encoding="utf8")); d.setdefault("gates", {})["hook"] = "error"; json.dump(d, open(f, "w", encoding="utf8"), indent=2)
+PY3
 mkdir -p "$R/proj/src/main/java/com/acme"; printf 'package com.acme;\npublic class OrderService {\n    public Long create(String no) {\n        return 1L;\n    }\n}\n' > "$R/proj/src/main/java/com/acme/OrderService.java"
 ( cd "$R" && git add -A >/dev/null 2>&1 && gc -m java ); echo "// e" >> "$R/proj/src/main/java/com/acme/OrderService.java"; ( cd "$R" && git add -A )
 LAST="$(cd "$R" && git -c user.email=a@b -c user.name=t commit -q -m sub 2>&1)"; RC=$?; exit_is "project below the git root: the hook (run from the repo top) blocks a Service without a test" 1; has "...naming the right file" "proj/src/main/java/com/acme/OrderService.java|src/main/java/com/acme/OrderService.java"
@@ -1516,9 +1553,14 @@ PY2
 cp "$W/.trellis/plus/plus.config.json" "$WORK/n.cfg"
 T="$(mkplan sw L)"
 check "gates lists all 7 gates; the default profile is standard" 0 "profile: standard" $G gates
-LAST="$($G gates 2>&1)"; [ "$(echo "$LAST" | grep -cE '^  [a-zA-Z]+ +error ')" = "5" ] && [ "$(echo "$LAST" | grep -cE '^  designReview +warn ')" = "1" ] && [ "$(echo "$LAST" | grep -cE '^  manifests +off ')" = "1" ] && ok "...standard: 5 gates error, designReview warn, manifests off" || { bad "...standard: 5 gates error, designReview warn, manifests off"; show; }
+LAST="$($G gates 2>&1)"; [ "$(echo "$LAST" | grep -cE '^  [a-zA-Z]+ +error ')" = "4" ] && [ "$(echo "$LAST" | grep -cE '^  designReview +warn ')" = "1" ] && [ "$(echo "$LAST" | grep -cE '^  hook +warn ')" = "1" ] && [ "$(echo "$LAST" | grep -cE '^  manifests +off ')" = "1" ] && ok "...standard: 4 gates error, designReview warn, hook warn, manifests off" || { bad "...standard: 4 gates error, designReview warn, hook warn, manifests off"; show; }
 std_manifests_off() { setcfg '{"profile":"standard"}'; local o; o="$($G gates 2>&1)"; setcfg '{}'; echo "$o" | grep -qE '^  manifests +off '; }
-reverse "standard profile skips manifests" 1 'standard: { designReview: "warn", manifests: "off" }' 'standard: { designReview: "warn", manifests: "warn" }' chk 0 - std_manifests_off
+reverse "standard profile skips manifests" 1 'standard: { designReview: "warn", manifests: "off", hook: "warn" }' 'standard: { designReview: "warn", manifests: "warn", hook: "warn" }' chk 0 - std_manifests_off
+std_hook_warn() { setcfg '{"profile":"standard"}'; local o; o="$($G gates 2>&1)"; setcfg '{}'; echo "$o" | grep -qE '^  hook +warn '; }
+check "standard profile: the git hook is warn" 0 - std_hook_warn
+reverse "standard profile makes the hook warn" 1 'standard: { designReview: "warn", manifests: "off", hook: "warn" }' 'standard: { designReview: "warn", manifests: "off" }' chk 0 - std_hook_warn
+strict_hook_error() { setcfg '{"profile":"strict"}'; local o; o="$($G gates 2>&1)"; setcfg '{}'; echo "$o" | grep -qE '^  hook +error '; }
+check "strict profile: the git hook still blocks" 0 - strict_hook_error
 setcfg '{}' # no profile key: the default comes from gate.mjs itself
 reverse "default profile is standard" 1 'profile: "standard",' 'profile: "strict",' chk 0 "profile: standard" $G gates
 setcfg '{"profile":"strict"}'; LAST="$($G gates 2>&1)"; [ "$(echo "$LAST" | grep -cE '^  [a-zA-Z]+ +error ')" = "7" ] && ok "...strict: exactly 7 gate lines with mode error" || { bad "...strict: exactly 7 gate lines with mode error"; show; }
@@ -1603,10 +1645,14 @@ setcfg '{"gates":{"test":"off","ocr":"off"}}'
 check "pre-commit (CLI) with gates.test=off skips the test gate" 0 "skipped: test is off" $G pre-commit --task "$T"
 reverse "pre-commit honours test off" 1 'if (gateMode(cfg, "test") === "off") reps.push(skippedReport("test-gate", "test"))' 'if (false) reps.push(skippedReport("test-gate", "test"))' chk 0 "skipped: test is off" $G pre-commit --task "$T"
 setcfg '{}'
-check "hook strict: staged untested controller blocks" 1 "commit blocked by the pre-commit hook" $G pre-commit --hook
+check "default profile: the hook warns and lets the commit through" 0 "\(hook=warn, profile standard\)" $G pre-commit --hook
+setcfg '{"profile":"strict"}'
+check "strict profile: staged untested controller blocks" 1 "commit blocked by the pre-commit hook" $G pre-commit --hook
+setcfg '{"gates":{"hook":"error"}}'
+check "gates.hook=error: staged untested controller blocks" 1 "commit blocked by the pre-commit hook" $G pre-commit --hook
 setcfg '{"gates":{"hook":"warn"}}'
-check "gates.hook=warn: the hook prints what would block and lets the commit through" 0 "\(gates.hook=warn\) the checks above would block this commit" $G pre-commit --hook
-reverse "hook warn lets the commit through" 1 'if (code && hook && gateMode(cfg, "hook") === "warn") {' 'if (false) {' chk 0 "gates.hook=warn" $G pre-commit --hook
+check "gates.hook=warn: the hook prints what would block and lets the commit through" 0 "\(hook=warn, gates.hook\) the checks above would block this commit" $G pre-commit --hook
+reverse "hook warn lets the commit through" 1 'if (code && hook && gateMode(cfg, "hook") === "warn") {' 'if (false) {' chk 0 "hook=warn, gates.hook" $G pre-commit --hook
 setcfg '{"gates":{"hook":"off"}}'
 check "gates.hook=off: the hook is skipped" 0 "the hook is off \(gates.hook\)" $G pre-commit --hook
 reverse "hook off skips" 1 'if (hook && gateMode(cfg, "hook") === "off") {' 'if (false) {' chk 0 "the hook is off" $G pre-commit --hook
@@ -1689,7 +1735,7 @@ check "...the same call with -u works" 0 "Installed: Trellis 0.6.17" qi $INST "$
 
 # --- fresh project via the (pinned) global trellis; -u before and after the path
 QF="$WORK/q-fresh"; mkdir -p "$QF"; : > "$QLOG"
-check "install on an empty dir: init + apply --all + doctor" 0 "Installed: Trellis 0.6.17 \+ trellis-plus 3\.0\.0" qi $INST -u luke "$QF"
+check "install on an empty dir: init + apply --all + doctor" 0 "Installed: Trellis 0.6.17 \+ trellis-plus $TVER_RE" qi $INST -u luke "$QF"
 has "...the project path is the directory, not the -u value" "project: $QF "
 grep -q "init --opencode -u luke -y" "$QLOG" && ok "init got --opencode -u luke -y" || { bad "init got --opencode -u luke -y"; cat "$QLOG"; }
 grep -q "^npx" "$QLOG" && bad "pinned global trellis is used, npx is not" || ok "pinned global trellis is used, npx is not"
@@ -1704,6 +1750,7 @@ check "existing project also honours --git-init" 0 "Installed" qi $INST "$QF" --
 QG="$WORK/q-git"; mkdir -p "$QG"
 check "--git-init creates the repo so the hook is installed" 0 "Installed" qi $INST "$QG" -u luke --git-init
 [ -x "$QG/.git/hooks/pre-commit" ] && ok "pre-commit hook exists after --git-init" || bad "pre-commit hook exists after --git-init"
+grep -q "trellis-plus:begin:rules" "$QG/AGENTS.md" && ok "install writes the coding rules to AGENTS.md" || bad "install writes the coding rules to AGENTS.md"
 
 # --- init failure: nothing patched
 QX="$WORK/q-fail"; mkdir -p "$QX"
@@ -1770,7 +1817,7 @@ RU="$WORK/r-up"; mkuse "$RU"; mine "$RU" > "$WORK/ru-before"; : > "$RLOG"
 echo "// local edit" >> "$RU/.trellis/plus/gate.mjs"                  # plus-managed, outside spec/: may be overwritten
 echo "my edit" >> "$RU/.trellis/spec/guides/plus-testing-guide.md"    # plus-managed, INSIDE spec/: must be kept
 mine "$RU" > "$WORK/ru-before"
-check "update: exit 0 and the from -> to line" 0 "Updated: Trellis 0.6.17 -> 0.6.17, trellis-plus .* -> 3\.0\.0" ri $UPD "$RU"
+check "update: exit 0 and the from -> to line" 0 "Updated: Trellis 0.6.17 -> 0.6.17, trellis-plus .* -> $TVER_RE" ri $UPD "$RU"
 mine "$RU" > "$WORK/ru-after"
 cmp -s "$WORK/ru-before" "$WORK/ru-after" && ok "spec/ tasks/ workspace/ .developer config.yaml are byte-identical (plus.config is checked separately)" || { bad "protected files are byte-identical"; diff "$WORK/ru-before" "$WORK/ru-after" | head -5; }
 has "config.yaml: the rewrite by trellis was undone" "config\.yaml: Trellis rewrote it, your version was put back"
@@ -1869,6 +1916,205 @@ for i in 1 2 3 4 5; do ri env FAKE_TRELLIS_FAIL_UPDATE=1 $UPD "$RFIVE" >/dev/nul
 RA="$WORK/r-prune-apply"; mkuse "$RA"
 for i in 1 2 3 4 5; do echo "// apply $i" >> "$RA/.trellis/plus/gate.mjs"; node "$TOOL/trellis-plus.mjs" apply "$RA" --all --force >/dev/null 2>&1; done
 [ "$(find "$RA/.trellis/plus/backup" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ')" -le 3 ] && ok "standalone apply also keeps at most 3 backup directories" || bad "standalone apply also keeps at most 3 backup directories"
+# coding rules: a manifest from before they existed gets them on update; update keeps them otherwise
+r_update_default() { local d="$WORK/rr$RANDOM"; mkuse "$d"
+  python3 - "$d/.trellis/plus/manifest.json" "$d/AGENTS.md" <<'PY'
+import json, re, sys
+m = json.load(open(sys.argv[1], encoding="utf8")); m["options"].pop("codingRules", None); json.dump(m, open(sys.argv[1], "w", encoding="utf8"), indent=2)
+s = open(sys.argv[2], encoding="utf8").read(); open(sys.argv[2], "w", encoding="utf8").write(re.sub(r"\n<!-- trellis-plus:begin:rules -->.*?<!-- trellis-plus:end:rules -->\n", "", s, flags=re.S))
+PY
+  ri node "${!#}/trellis-plus.mjs" update "$d" >/dev/null 2>&1; grep -q "trellis-plus:begin:rules" "$d/AGENTS.md"; }
+r_update_keeps() { local d="$WORK/rk$RANDOM"; mkuse "$d"; ri node "${!#}/trellis-plus.mjs" update "$d" >/dev/null 2>&1; [ "$(grep -c "trellis-plus:begin:rules" "$d/AGENTS.md")" = 1 ]; }
+check "update: an old manifest (no coding-rules option) gets the rules" 0 - r_update_default "$TOOL"
+check "update: the rules stay, exactly one block" 0 - r_update_keeps "$TOOL"
+reverse_file "update defaults the rules on for an old manifest" trellis-plus.mjs 1 ' || (UPDATING && prev.codingRules === undefined)' '' r_update_default
+fi
+
+if want S; then
+echo "== S. task flow record: task.json meta.plus_flow is written by the gates (tier, steps, current)"
+mkproj "$WORK/s"; cd "$W"
+flow_is() { python3 - "$W/$1/task.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf8"))
+f = d.get("meta", {}).get("plus_flow")
+if not f: print("no flow"); sys.exit(0)
+assert "status" in d and "title" in d, "other task.json keys lost"
+print("tier=%s current=%s done=%s steps=%s" % (f["tier"], f["current"], ",".join(x["id"] for x in f["steps"] if x["state"] == "done"), ",".join(x["id"] for x in f["steps"])))
+PY
+}
+setgate() { python3 - "$W/.trellis/plus/plus.config.json" "$1" "$2" <<'PY3'
+import json, sys
+f = sys.argv[1]; d = json.load(open(f, encoding="utf8")); d.setdefault("gates", {})
+if sys.argv[3] == "-": d["gates"].pop(sys.argv[2], None)
+else: d["gates"][sys.argv[2]] = sys.argv[3]
+json.dump(d, open(f, "w", encoding="utf8"), indent=2)
+PY3
+}
+TN="$(newtask "$W" fl0)"
+check "a task without a tier has no flow record" 0 "no flow" flow_is "$TN"
+$G tier "$TN" M --reason "regression: flow M" >/dev/null 2>&1
+check "tier M writes the flow: 8 steps, 1.0 done, current 1.1" 0 "tier=M current=1.1 done=1.0 steps=1.0,1.1,1.6,1.4,2.1,2.4,2.5,3.4$" flow_is "$TN"
+TS1="$(newtask "$W" fl1)"; $G tier "$TS1" S --reason "regression: flow S" >/dev/null 2>&1
+check "tier S: 7 steps (no plan documents, no review)" 0 "tier=S current=1.1 done=1.0 steps=1.0,1.1,1.4,2.1,2.4,2.5,3.4$" flow_is "$TS1"
+TL1="$(newtask "$W" fl2)"; $G tier "$TL1" L >/dev/null 2>&1
+check "tier L: 10 steps with code map (1.2) and design review (1.7)" 0 "tier=L current=1.2 done=1.0 steps=1.0,1.2,1.1,1.6,1.7,1.4,2.1,2.4,2.5,3.4$" flow_is "$TL1"
+flow_m_steps() { local t; t="$(newtask "$W" "fo$RANDOM")"; $G tier "$t" M --reason "regression: flow M" >/dev/null 2>&1; flow_is "$t"; }
+reverse "tier M has no design review step" 1 'M: ["1.0", "1.1", "1.6", "1.4",' 'M: ["1.0", "1.1", "1.6", "1.7", "1.4",' chk 0 "steps=1.0,1.1,1.6,1.4,2.1,2.4,2.5,3.4$" flow_m_steps
+# gates record their result
+mk_m() { local t; t="$(mkplan "$1" M)"; echo "$t"; }
+flow_align()  { local t; t="$(mk_m "fa$RANDOM")"; $G align "$t" >/dev/null 2>&1; flow_is "$t"; }
+flow_lint()   { local t; t="$(mk_m "fb$RANDOM")"; $G align "$t" >/dev/null 2>&1; $G lint-plan "$t" >/dev/null 2>&1; flow_is "$t"; }
+flow_reset()  { local t; t="$(mk_m "fc$RANDOM")"; $G align "$t" >/dev/null 2>&1; echo "TBD" >> "$W/$t/prd.md"; $G align "$t" >/dev/null 2>&1; flow_is "$t"; }
+check "align passes → 1.1 done, current 1.6" 0 "tier=M current=1.6 done=1.0,1.1 " flow_align
+check "lint-plan passes → 1.6 done, current 1.4 (start)" 0 "tier=M current=1.4 done=1.0,1.1,1.6 " flow_lint
+check "a gate that fails again takes the step (and later ones) back to todo" 0 "tier=M current=1.1 done=1.0 " flow_reset
+reverse "a passing gate is recorded" 1 'recordStep(taskDir, g[1], reps.every(passed))' 'recordStep(taskDir, g[1], false)' chk 0 "current=1.6 done=1.0,1.1 " flow_align
+reverse "a failing gate resets the step" 1 'k >= i && x.state === "done"' 'false && x.state === "done"' chk 0 "current=1.1 done=1.0 " flow_reset
+# a gate that is off or does not apply leaves the record alone
+flow_off() { local t; t="$(mk_m "fd$RANDOM")"; setgate align off; $G align "$t" >/dev/null 2>&1; setgate align -; flow_is "$t"; }
+check "gates.align=off does not mark 1.1 done" 0 "current=1.1 done=1.0 " flow_off
+reverse "a skipped gate is not recorded" 1 'if (g && !skipped(reps[0])) recordStep' 'if (g) recordStep' chk 0 "current=1.1 done=1.0 " flow_off
+flow_m_review() { local t; t="$(mk_m "fe$RANDOM")"; LAST="$($G design-review "$t" 2>&1)"; echo "$LAST"; flow_is "$t"; }
+check "tier M: design-review says skip step 1.7, nothing is recorded" 0 "skip step 1.7, do not dispatch plus-design-reviewer" flow_m_review
+check "...and the M flow stays without 1.7" 0 "steps=1.0,1.1,1.6,1.4,2.1,2.4,2.5,3.4$" flow_m_review
+reverse "M is told to skip the review" 1 '(L only) — skip step 1.7, do not dispatch plus-design-reviewer' '(L only)' chk 0 "skip step 1.7" flow_m_review
+# standard profile: design-review is warn — a failure that would block is NOT a pass
+flow_l_warn() { local t; t="$(mkplan "ff$RANDOM" L)"; $G design-review "$t" >/dev/null 2>&1; flow_is "$t"; }
+check "L: design-review in warn mode with no review report still exits 0 (warn)" 0 "tier=L" flow_l_warn
+has "...1.7 is not among the done steps" "done=1.0( |,)"
+hasnt "...(1.7 absent from done)" "done=[0-9.,]*1\\.7[ ,]"
+reverse "a warn-mode failure is not a pass" 1 'const passed = (r) => r.ok && !r.warnings.some(' 'const passed = (r) => r.ok || !r.warnings.some(' chk 0 "done=1.0 " flow_l_warn
+# 2.4 and 2.5: only the formal runs count
+flow_test_static() { local t; t="$(mk_m "fg$RANDOM")"; $G test --task "$t" >/dev/null 2>&1; flow_is "$t"; }
+flow_test_run()    { local t; t="$(mk_m "fh$RANDOM")"; $G test --task "$t" --run >/dev/null 2>&1; flow_is "$t"; }
+check "test --run (step 2.4) passes → 2.4 and everything before it are done" 0 "current=2.5 done=1.0,1.1,1.6,1.4,2.1,2.4 " flow_test_run
+check "test without --run records nothing" 0 "current=1.1 done=1.0 " flow_test_static
+reverse "only test --run counts" 1 'if (opts.run) flowTask = t' 'flowTask = t' chk 0 "current=1.1 done=1.0 " flow_test_static
+flow_test_fail() { local t; t="$(mk_m "fi$RANDOM")"; $G test --task "$t" --run >/dev/null 2>&1; echo "// f" >> "$W/src/main/java/com/acme/OrderService.java"; $G test --task "$t" --run >/dev/null 2>&1; local o; o="$(flow_is "$t")"; git checkout -q -- .; echo "$o"; }
+check "a later failing test --run takes 2.4 back to todo" 0 "current=2.4 done=1.0,1.1,1.6,1.4,2.1 " flow_test_fail
+export FAKE_OCR_FINDINGS_FILE="$HERE/fixtures/ocr/findings-empty.json"
+flow_ocr_ok() { local t; t="$(mk_m "fj$RANDOM")"; $G ocr --task "$t" --run >/dev/null 2>&1; flow_is "$t"; }
+check "ocr passes (no findings) → 2.5 done, current 3.4" 0 "current=3.4 done=1.0,1.1,1.6,1.4,2.1,2.4,2.5 " flow_ocr_ok
+export FAKE_OCR_FINDINGS_FILE="$HERE/fixtures/ocr/findings-high-low.json"
+flow_ocr_bad() { local t; t="$(mk_m "fk$RANDOM")"; $G ocr --task "$t" --run >/dev/null 2>&1; flow_is "$t"; }
+check "ocr with untriaged findings does not mark 2.5 done" 0 "current=1.1 done=1.0 " flow_ocr_bad
+unset FAKE_OCR_FINDINGS_FILE
+# pre-start = step 1.4
+flow_start_ok()  { local t; t="$(mk_m "fl$RANDOM")"; $G pre-start "$t" >/dev/null 2>&1; flow_is "$t"; }
+flow_start_bad() { local t; t="$(newtask "$W" "fm$RANDOM")"; $G tier "$t" M --reason "regression: flow M" >/dev/null 2>&1; $G seed "$t" >/dev/null 2>&1; $G pre-start "$t" >/dev/null 2>&1; flow_is "$t"; }
+check "pre-start passes → 1.4 done, current 2.1" 0 "current=2.1 done=1.0,1.1,1.6,1.4 " flow_start_ok
+check "pre-start with unfilled templates fails → nothing beyond 1.0 is done" 0 "current=1.1 done=1.0 " flow_start_bad
+reverse "pre-start records 1.4" 1 'if (reps.every((r) => r.ok)) recordStep(taskDir, "1.4", true)' 'if (false) recordStep(taskDir, "1.4", true)' chk 0 "current=2.1 done=1.0,1.1,1.6,1.4 " flow_start_ok
+# changing the tier keeps the progress that still applies
+flow_retier() { local t; t="$(mk_m "fn$RANDOM")"; $G align "$t" >/dev/null 2>&1; $G tier "$t" L --reason "x" >/dev/null 2>&1; flow_is "$t"; }
+check "M → L keeps the done steps and uses the L step list" 0 "tier=L current=1.2 done=1.0,1.1 steps=1.0,1.2,1.1,1.6,1.7,1.4,2.1,2.4,2.5,3.4$" flow_retier
+reverse "a tier change keeps the progress" 1 'if (o?.state === "done") return' 'if (false) return' chk 0 "done=1.0,1.1 " flow_retier
+fi
+
+if want T; then
+echo "== T. coding rules in AGENTS.md (apply --all / --coding-rules / --no-coding-rules, doctor, revert)"
+RB='<!-- trellis-plus:begin:rules -->'
+newproj() { local d="$WORK/t$RANDOM$RANDOM"; fresh "$d"; echo "$d"; }
+r_all()   { local d; d="$(newproj)"; node "${!#}/trellis-plus.mjs" apply "$d" --all >/dev/null 2>&1; grep -q '## Coding Rules (trellis-plus)' "$d/AGENTS.md"; }
+r_idem()  { local d; d="$(newproj)"; node "${!#}/trellis-plus.mjs" apply "$d" --all >/dev/null 2>&1; node "${!#}/trellis-plus.mjs" apply "$d" --all >/dev/null 2>&1; [ "$(grep -c "$RB" "$d/AGENTS.md")" = 1 ]; }
+r_keep()  { local d; d="$(newproj)"; echo "MY OWN RULE" >> "$d/AGENTS.md"; cp "$d/AGENTS.md" "$WORK/agents.orig"; node "${!#}/trellis-plus.mjs" apply "$d" --all >/dev/null 2>&1; head -c "$(wc -c < "$WORK/agents.orig")" "$d/AGENTS.md" | cmp -s - "$WORK/agents.orig"; }
+r_off()   { local d; d="$(newproj)"; node "${!#}/trellis-plus.mjs" apply "$d" --all --no-coding-rules >/dev/null 2>&1; ! grep -q "$RB" "$d/AGENTS.md"; }
+r_only()  { local d; d="$(newproj)"; node "${!#}/trellis-plus.mjs" apply "$d" --coding-rules >/dev/null 2>&1; grep -q "$RB" "$d/AGENTS.md"; }
+r_none()  { local d; d="$(newproj)"; node "${!#}/trellis-plus.mjs" apply "$d" --git-hook >/dev/null 2>&1; ! grep -q "$RB" "$d/AGENTS.md"; }
+r_revert(){ local d; d="$(newproj)"; cp "$d/AGENTS.md" "$WORK/agents.orig2"; node "${!#}/trellis-plus.mjs" apply "$d" --all >/dev/null 2>&1; node "${!#}/trellis-plus.mjs" revert "$d" >/dev/null 2>&1; cmp -s "$d/AGENTS.md" "$WORK/agents.orig2"; }
+r_create(){ local d; d="$(newproj)"; rm -f "$d/AGENTS.md"; node "${!#}/trellis-plus.mjs" apply "$d" --all >/dev/null 2>&1; grep -q "$RB" "$d/AGENTS.md" && node "${!#}/trellis-plus.mjs" revert "$d" >/dev/null 2>&1 && [ ! -e "$d/AGENTS.md" ]; }
+r_doctor(){ local d; d="$(newproj)"; node "${!#}/trellis-plus.mjs" apply "$d" --all >/dev/null 2>&1
+  python3 - "$d/AGENTS.md" <<'PY'
+import re, sys
+s = open(sys.argv[1], encoding="utf8").read(); open(sys.argv[1], "w", encoding="utf8").write(re.sub(r"\n<!-- trellis-plus:begin:rules -->.*?<!-- trellis-plus:end:rules -->\n", "", s, flags=re.S))
+PY
+  ! node "${!#}/trellis-plus.mjs" doctor "$d" >/dev/null 2>&1; }   # succeeds when doctor reports the missing block
+r_fix()   { local d; d="$(newproj)"; node "${!#}/trellis-plus.mjs" apply "$d" --all >/dev/null 2>&1; python3 - "$d/AGENTS.md" <<'PY'
+import re, sys
+s = open(sys.argv[1], encoding="utf8").read(); open(sys.argv[1], "w", encoding="utf8").write(re.sub(r"\n<!-- trellis-plus:begin:rules -->.*?<!-- trellis-plus:end:rules -->\n", "", s, flags=re.S))
+PY
+  node "${!#}/trellis-plus.mjs" doctor "$d" --fix >/dev/null 2>&1; grep -q "$RB" "$d/AGENTS.md"; }
+r_text()  { local d; d="$(newproj)"; node "${!#}/trellis-plus.mjs" apply "$d" --all >/dev/null 2>&1; local f="$d/AGENTS.md"
+  [ "$(grep -cE '^[1-6]\. \*\*' "$f")" = 6 ] && grep -q 'validate only at system boundaries' "$f" && grep -q 'you are a sub-agent' "$f" && grep -q 'extra process layers' "$f"; }
+check "apply --all appends the coding rules to AGENTS.md" 0 - r_all "$TOOL"
+check "apply --all twice: exactly one block (idempotent)" 0 - r_idem "$TOOL"
+check "text the user already has in AGENTS.md stays byte for byte in front of the block" 0 - r_keep "$TOOL"
+check "--no-coding-rules leaves them out even with --all" 0 - r_off "$TOOL"
+check "--coding-rules alone writes only the rules" 0 - r_only "$TOOL"
+check "apply without --all / --coding-rules does not touch AGENTS.md" 0 - r_none "$TOOL"
+check "revert restores AGENTS.md byte for byte" 0 - r_revert "$TOOL"
+check "missing AGENTS.md is created, and removed again by revert" 0 - r_create "$TOOL"
+check "doctor reports a missing coding-rules block" 0 - r_doctor "$TOOL"
+check "doctor --fix puts the block back" 0 - r_fix "$TOOL"
+check "the rules: 6 numbered rules, boundary validation, sub-agent case, no extra process layers" 0 - r_text "$TOOL"
+reverse_file "apply --all writes the rules" trellis-plus.mjs 1 'codingRules: !NO_RULES && (ALL ||' 'codingRules: !NO_RULES && (false ||' r_all
+reverse_file "writing the rules twice does not duplicate" trellis-plus.mjs 1 '  if (RULES_RE.test(t)) {
+    const nt' '  if (false) {
+    const nt' r_idem
+reverse_file "--no-coding-rules is honoured" trellis-plus.mjs 1 'codingRules: !NO_RULES && (' 'codingRules: (' r_off
+reverse_file "--coding-rules alone" trellis-plus.mjs 1 'flag("coding-rules") ||' 'false ||' r_only
+reverse_file "revert removes the block" trellis-plus.mjs 1 'unpatchRules(m0); ' '' r_revert
+reverse_file "revert deletes an AGENTS.md that trellis-plus created" trellis-plus.mjs 1 'manifest?.createdAgentsMd && nt.trim() === ""' 'false' r_create
+reverse_file "doctor checks the block" trellis-plus.mjs 1 'if (o.codingRules && !rulesPatched())' 'if (false)' r_doctor
+reverse_file "the rules text keeps the boundary-validation qualifier" assets/patches/agents-md-rules.md 1 'validate only at system boundaries (user input, external calls)' 'never validate' r_text
+reverse_file "the rules text covers the sub-agent case" assets/patches/agents-md-rules.md 1 'If you cannot ask (e.g. you are a sub-agent), pick the simplest reading and note it in your report.' '' r_text
+fi
+
+if want U; then
+echo "== U. trellis-plus status: workflow progress of the active tasks"
+mkproj "$WORK/u"; cd "$W"; U="$W"; export TRELLIS_CONTEXT_ID=plusreg
+startt() { ( cd "$W" && TRELLIS_PLUS_SKIP_GATE=1 python3 .trellis/scripts/task.py start "$1" --allow-empty-context >"$WORK/startt.log" 2>&1 ); }
+TA="$(mkplan fu-a M)"; $G align "$TA" >/dev/null 2>&1
+TB="$(newtask "$W" fu-b)"; $G tier "$TB" S --reason "regression: status S" >/dev/null 2>&1
+TC="$(newtask "$W" fu-c)"
+startt "$TA"   # `task.py create` makes the new task the session task: make TA the current one again
+st() { node "${!#}/trellis-plus.mjs" status "$U" "${@:1:$#-1}"; }
+st_default() { local o; o="$(node "${!#}/trellis-plus.mjs" status "$U" 2>&1)"; echo "$o" | grep -q "fu-a" && ! echo "$o" | grep -q "fu-b" && ! echo "$o" | grep -q "fu-c"; }
+st_bootstrap() { ! node "${!#}/trellis-plus.mjs" status "$U" 2>&1 | grep -q "00-bootstrap"; }
+st_progress() { node "${!#}/trellis-plus.mjs" status "$U" 2>&1 | grep -qF '[██░░░░░░] 2/8   next: 1.6 计划文档'; }
+st_glyphs() { local o; o="$(node "${!#}/trellis-plus.mjs" status "$U" 2>&1)"; echo "$o" | grep -q '✔ 1.1' && echo "$o" | grep -q '▶ 1.6' && echo "$o" | grep -q '○ 1.4'; }
+st_all() { local o; o="$(node "${!#}/trellis-plus.mjs" status "$U" --all 2>&1)"; echo "$o" | grep -q "fu-b" && echo "$o" | grep -q "tier not set" && echo "$o" | grep -q "choose the tier first"; }
+st_json() { node "${!#}/trellis-plus.mjs" status "$U" --json 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); a=[x for x in d if x["task"].endswith("fu-a")][0]; assert a["tier"]=="M" and a["current"]=="1.6" and len(a["steps"])==8 and a["steps"][1]["done"] is True'; }
+st_suggest() { python3 - "$W/$TA/task.json" <<'PY'
+import json, sys
+f = sys.argv[1]; d = json.load(open(f, encoding="utf8")); d["meta"]["plus_tier_suggested"] = "L"; json.dump(d, open(f, "w", encoding="utf8"), indent=2)
+PY
+  node "${!#}/trellis-plus.mjs" status "$U" 2>&1 | grep -q "tier M (suggested L, your choice is kept)"; }
+st_done() { python3 - "$W/$TB/task.json" <<'PY'
+import json, sys
+f = sys.argv[1]; d = json.load(open(f, encoding="utf8")); d["status"] = "completed"; json.dump(d, open(f, "w", encoding="utf8"), indent=2)
+PY
+  local o; o="$(node "${!#}/trellis-plus.mjs" status "$U" --all 2>&1)"
+  python3 - "$W/$TB/task.json" <<'PY'
+import json, sys
+f = sys.argv[1]; d = json.load(open(f, encoding="utf8")); d["status"] = "planning"; json.dump(d, open(f, "w", encoding="utf8"), indent=2)
+PY
+  echo "$o" | grep -q "7/7   all steps done"; }
+st_noflow() { local o; o="$(node "${!#}/trellis-plus.mjs" status "$U" --all 2>&1)"; echo "$o" | grep -q "7/7\|0/7\|1/7" ; }
+check "default: only the active task (in_progress) is listed" 0 - st_default "$TOOL"
+check "the bootstrap task is not listed" 0 - st_bootstrap "$TOOL"
+check "progress bar and the next step" 0 - st_progress "$TOOL"
+check "done / current / todo glyphs" 0 - st_glyphs "$TOOL"
+check "--all also lists planning tasks, with the missing tier called out" 0 - st_all "$TOOL"
+check "--json is machine readable (tier, current step, 8 steps)" 0 - st_json "$TOOL"
+check "an overridden tier shows the suggestion" 0 - st_suggest "$TOOL"
+check "a completed task shows every step done" 0 - st_done "$TOOL"
+check "not a Trellis project: exit 2" 2 "not a Trellis project" node "$TOOL/trellis-plus.mjs" status "$WORK"
+EMPTY="$WORK/u-empty"; fresh "$EMPTY"; node "$TOOL/trellis-plus.mjs" apply "$EMPTY" --all >/dev/null 2>&1
+st_empty() { node "${!#}/trellis-plus.mjs" status "$EMPTY" 2>&1 | grep -q "no active tasks"; }
+check "no active task: says so (bootstrap does not count)" 0 - st_empty "$TOOL"
+echo "{ broken" > "$W/$TC/task.json"
+st_invalid() { node "${!#}/trellis-plus.mjs" status "$U" --all 2>&1 | grep -q "invalid task.json"; }
+check "--all: a broken task.json is reported, not fatal" 0 - st_invalid "$TOOL"
+echo '{"title":"x","status":"planning"}' > "$W/$TC/task.json"
+reverse_file "default lists only active tasks" trellis-plus.mjs 1 '!(data.status === "in_progress" || name === current)' 'false' st_default
+reverse_file "the bootstrap task is skipped" trellis-plus.mjs 1 '/^00-bootstrap/.test(name) || ' '' st_bootstrap
+reverse_file "progress bar" trellis-plus.mjs 1 '"█".repeat(done)' '"░".repeat(done)' st_progress
+reverse_file "current step glyph" trellis-plus.mjs 1 'x.id === v.current ? "▶" : "○"' '"○"' st_glyphs
+reverse_file "--all lists every task" trellis-plus.mjs 1 'const all = flag("all")' 'const all = false' st_all
+reverse_file "--json output" trellis-plus.mjs 1 'if (flag("json"))' 'if (false)' st_json
+reverse_file "the suggestion is shown" trellis-plus.mjs 1 '${v.suggested ? ' '${false ? ' st_suggest
+reverse_file "a completed task is all done" trellis-plus.mjs 1 'finished || x.state === "done"' 'x.state === "done"' st_done
 fi
 
 echo

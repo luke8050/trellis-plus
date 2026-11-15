@@ -7,7 +7,7 @@
 [![npm](https://img.shields.io/npm/v/@luke8050/trellis-plus?color=blue)](https://www.npmjs.com/package/@luke8050/trellis-plus)
 [![node](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org)
 [![license](https://img.shields.io/badge/license-MIT-blue)](#license)
-[![tests](https://img.shields.io/badge/regression-728%20assertions-success)](./trellis-plus/test-harness)
+[![tests](https://img.shields.io/badge/regression-819%20assertions-success)](./trellis-plus/test-harness)
 
 **Trellis**（`trellis init`，OpenCode 平台）负责"任务 → 计划 → 实现 → 检查 → 提交"的骨架。trellis-plus 在这个骨架上补四件事，且几乎不增加 token 开销——所有检查都是 Node 脚本在本地跑，不调用模型。
 
@@ -140,7 +140,7 @@ npx @luke8050/trellis-plus apply <project> --dry-run
 | `doctor <project> [--fix]` | 体检：文件是否齐全、补丁是否被 `trellis update` 冲掉、配置是否合法。**每次 `trellis update` 之后跑一次** |
 | `revert <project> [--purge]` | 还原所有补丁；`--purge` 连随包文件一起删 |
 
-`--all` = `--hard-gate --patch-plugin --patch-agents --git-hook`（会改写 `.git/hooks/pre-commit` 与两个 agent 文件）。
+`--all` = `--hard-gate --patch-plugin --patch-agents --git-hook --coding-rules`（会改写 `.git/hooks/pre-commit` 与两个 agent 文件，并在 `AGENTS.md` 末尾追加一个 `trellis-plus:begin:rules` 编码规范块——英文 6 条，防过度防御 / 过度设计 / 顺手改动；`--no-coding-rules` 不写入或移除；`install` 默认写入，`update` 也会补上）。
 
 `plus.config.json` 属于项目，`apply` 不会覆盖它，只会把工具版本号（读自工具自己的 `package.json`）写进 `version` 这一个键，`doctor` 会核对。
 
@@ -150,8 +150,8 @@ AI 先看代码给出级别建议与理由，你在对话里选定后才继续�
 
 | 级别 | 适用 | 规划产物 | 额外门禁 |
 |---|---|---|---|
-| **S** | 文档、注释、配置文案、纯测试、不改行为的重命名；**不得动 Service / Controller** | `prd.md` | align · 单测门禁 · hook |
-| **M** | ≤ 3 个 Service / Controller、同一 Maven 模块、不涉及库表 / 对外契约 / 事务并发 | + `design.md`、`implement.md` | + lint-plan |
+| **S** | 文档、注释、配置文案、纯测试、不改行为的重命名；建议不动 Service / Controller | `prd.md` | align · 单测门禁 · hook |
+| **M** | 建议 ≤ 3 个 Service / Controller、同一 Maven 模块、不涉及库表 / 对外契约 / 事务并发；**不做独立设计评审（仅 L）** | + `design.md`、`implement.md` | + lint-plan |
 | **L** | 其余 | + `research/code-map.md`、独立设计评审 | 全部 |
 
 一次 L 级任务的主干（编号是 Trellis 的步骤 id，不是执行顺序）：
@@ -179,7 +179,7 @@ node .trellis/plus/gate.mjs <command> [task]
 
 | 命令 | 作用 |
 |---|---|
-| `tier <task> [S\|M\|L] [--reason]` | 查看 / 设置级别；S 与 M 必须写原因；工作区已改 Service / Controller 时拒绝 S，超限拒绝 M |
+| `tier <task> [S\|M\|L] [--reason]` | 查看 / 设置级别；S 与 M 必须写原因；**级别以人的选择为准**：工作区改动超出建议规模时只告警，并把建议级别记入 `meta.plus_tier_suggested` / `plus_tier_override` |
 | `seed <task>` | 按级别生成文档模板（替换 Trellis 自带的 `TBD` 骨架） |
 | `align <task>` | `prd.md`：对齐状态、待确认问题清零、决策记录非空、需求编号 `R<n>` |
 | `anchors <task>` | 核对 `design.md` / `implement.md` / `code-map.md` 里的 `文件:行#符号` 锚点是否真实存在 |
@@ -189,6 +189,8 @@ node .trellis/plus/gate.mjs <command> [task]
 | `ocr [--run] [--inspect] [--force --reason]` | OCR 与分诊；报告过期判定以"报告与其分诊中较新者"为基准 |
 | `pre-commit [--hook]` | test + ocr；`--hook` 只看已暂存文件 |
 | `gates` / `matrix` / `usage` / `status` | 当前开关、覆盖矩阵、按阶段 token 统计、下一步（均 0 token） |
+
+**进度记录与查看**：各门禁通过 / 失败时自动把流程写进 `task.json` 的 `meta.plus_flow`（级别、全部步骤、每步 done/todo、当前步骤）。查看：`node trellis-plus.mjs status [<项目>] [--all] [--json]`——默认列出 `in_progress` 与当前会话任务，显示进度条与每一步 ✔ ▶ ○；`--all` 列出全部任务；`--json` 供脚本使用。
 
 任务选择顺序：`--task` > `TRELLIS_PLUS_TASK` > 会话任务 > 唯一的 in_progress 任务；多个且无提示时不猜——命令行报错，hook 里降为告警。整体绕过：`TRELLIS_PLUS_SKIP_GATE=1`。
 
@@ -206,14 +208,13 @@ node .trellis/plus/gate.mjs <command> [task]
 | `ocr.*` | `mode`（`auto` / `cli` / `delegate`）、`maxRerun`、`blockingSeverities` |
 | `hook.runTests` | hook 里是否真跑 Maven（默认只做静态检查） |
 
-standard 档下 `designReview` 为告警、`manifests` 关闭，其余阻断。`node .trellis/plus/gate.mjs gates` 查看当前生效值。
+standard 档下 `designReview` 与 `hook` 为告警（git hook 默认只提示、不拦提交）、`manifests` 关闭，其余阻断；要让 hook 拦提交用 `"gates": {"hook": "error"}` 或 `profile: strict`。`node .trellis/plus/gate.mjs gates` 查看当前生效值。
 
 ## 仓库结构
 
 | 路径 | 内容 |
 |---|---|
 | `trellis-plus/` | npm 包本体：`trellis-plus.mjs`（安装器）、`assets/`（gate.mjs、模板、skills、agents、workflow 块）、`test-harness/`（回归套件） |
-| `trellis-opencode/` | 一个 `trellis init --opencode` 出来的样例项目，**仅作回归的 BASE**，不是交付物 |
 | `docs/` | [方案介绍](./docs/方案介绍.md)（为什么这样做、验证到什么程度）、[使用说明](./docs/使用说明.md)（安装、流程、排错）、[HANDOFF](./docs/HANDOFF.md)（交接记录） |
 
 ## 开发与测试
@@ -226,8 +227,8 @@ TRELLIS_DEVELOPER=<任意名字> BASE=../trellis-opencode bash test-harness/run-
 - 必须用 bash；退出码 = 失败断言数。
 - 全程使用假 `ocr` / 假 `mvn` / 夹具，不联网。
 - 每条门禁规则都有正例、反例，以及**反向对照**：临时把规则逻辑改坏，同一条断言必须失败。规则在自身变异下仍然通过，说明测试是假的。
-- 结果（Linux / GNU coreutils）：**728 通过 / 0 失败 / 1 跳过**（跳过的是 v1.1 → v2 升级用例，需 `V11_TOOL`）。
-- macOS/BSD 上同样可跑通（`sed -i` / `touch -d` 已改为可移植写法），实测 **728 通过 / 0 失败 / 1 跳过**。
+- 结果（Linux / GNU coreutils）：**819 通过 / 0 失败 / 1 跳过**（跳过的是 v1.1 → v2 升级用例，需 `V11_TOOL`）。
+- macOS/BSD 上同样可跑通（`sed -i` / `touch -d` 已改为可移植写法），实测 **819 通过 / 0 失败 / 1 跳过**。
 
 发布新版本只需改 `package.json` 的 `version` —— 安装器从那里读版本号并写进项目的 `plus.config.json`，仓库里没有第二处硬编码的版本。
 

@@ -122,8 +122,8 @@ const GATES = {
 }
 const PROFILES = {
   strict: {},
-  standard: { designReview: "warn", manifests: "off" },
-  light: { lintPlan: "warn", designReview: "off", manifests: "off", ocr: "warn" },
+  standard: { designReview: "warn", manifests: "off", hook: "warn" },
+  light: { lintPlan: "warn", designReview: "off", manifests: "off", ocr: "warn", hook: "warn" },
 }
 const GATE_MODES = ["error", "warn", "off"]
 
@@ -476,12 +476,76 @@ function needTier(rep, ti) {
   return true
 }
 
-function writeTier(taskDir, tier, reason) {
+const TIER_RANK = { S: 0, M: 1, L: 2 }
+/** The smallest tier the changed files support: a recommendation only, never enforced. */
+function suggestTier(sc, cfg) {
+  const mods = new Set(sc.map(moduleOf))
+  return sc.length > cfg.tiers.maxClassesM || mods.size > 1 ? "L" : sc.length > 0 ? "M" : "S"
+}
+
+// ── flow record: task.json meta.plus_flow = { tier, steps: [{ id, name, state: done|todo, at? }], current } ──
+// Written by the gates themselves when they pass or fail (0 tokens, nothing self-reported by the AI); `trellis-plus status` only reads it.
+const FLOW_STEPS = { "1.0": "定级", "1.2": "代码勘探", "1.1": "澄清与对齐", "1.6": "计划文档", "1.7": "设计评审", "1.4": "启动任务", "2.1": "实现与检查", "2.4": "单测门禁", "2.5": "OCR 评审", "3.4": "提交" }
+const FLOW_BY_TIER = {
+  S: ["1.0", "1.1", "1.4", "2.1", "2.4", "2.5", "3.4"],
+  M: ["1.0", "1.1", "1.6", "1.4", "2.1", "2.4", "2.5", "3.4"],
+  L: ["1.0", "1.2", "1.1", "1.6", "1.7", "1.4", "2.1", "2.4", "2.5", "3.4"],
+}
+const withCurrent = (f) => ({ tier: f.tier, steps: f.steps, current: f.steps.find((x) => x.state !== "done")?.id ?? null })
+/** The step list of a tier; steps already done in `prev` stay done (a tier change keeps the progress). 1.0 is done by definition. */
+function buildFlow(tier, prev) {
+  const old = new Map((Array.isArray(prev?.steps) ? prev.steps : []).map((x) => [x.id, x]))
+  const now = new Date().toISOString()
+  return withCurrent({ tier, steps: FLOW_BY_TIER[tier].map((id) => {
+    const o = old.get(id)
+    if (o?.state === "done") return { id, name: FLOW_STEPS[id], state: "done", at: o.at }
+    return id === "1.0" ? { id, name: FLOW_STEPS[id], state: "done", at: now } : { id, name: FLOW_STEPS[id], state: "todo" }
+  }) })
+}
+/** A gate passed (ok) -> that step and every earlier one are done; failed -> that step and every later one are todo again. */
+function recordStep(taskDir, id, ok) {
+  const tj = readTaskJson(taskDir)
+  const ti = taskTier(taskDir)
+  if (!tj || ti.unset || ti.legacy) return
+  const meta = tj.data.meta && typeof tj.data.meta === "object" ? tj.data.meta : {}
+  let flow = meta.plus_flow
+  if (!flow || flow.tier !== ti.tier || !Array.isArray(flow.steps)) flow = buildFlow(ti.tier, flow)
+  const i = flow.steps.findIndex((x) => x.id === id)
+  if (i < 0) return
+  const now = new Date().toISOString()
+  const steps = flow.steps.map((x, k) => ok
+    ? (k <= i && x.state !== "done" ? { id: x.id, name: x.name, state: "done", at: now } : x)
+    : (k >= i && x.state === "done" ? { id: x.id, name: x.name, state: "todo" } : x))
+  const next = withCurrent({ tier: flow.tier, steps })
+  if (JSON.stringify(next) === JSON.stringify(meta.plus_flow)) return
+  meta.plus_flow = next
+  tj.data.meta = meta
+  writeFileSync(tj.path, JSON.stringify(tj.data, null, 2) + (tj.raw.endsWith("\n") ? "\n" : ""))
+}
+const FLOW_GATES = [["anchors", "1.2"], ["align", "1.1"], ["lint-plan", "1.6"], ["design-review", "1.7"], ["test-gate", "2.4"], ["ocr-gate", "2.5"]]
+/** After a gate command: record its result. A gate that was switched off or does not apply leaves the record alone. */
+function recordFlow(cmd, taskDir, reps) {
+  if (!taskDir) return
+  const skipped = (r) => r.notes.some((n) => /^skipped:/.test(n))
+  // a gate in `warn` mode that WOULD have blocked has not passed (applyMode moved its errors into warnings)
+  const passed = (r) => r.ok && !r.warnings.some((w) => /^\(gates\.\w+=warn, would block otherwise\)/.test(w))
+  if (cmd === "pre-start") {
+    for (const r of reps) { const g = FLOW_GATES.find(([p]) => r.title.startsWith(p)); if (g && !skipped(r) && !passed(r)) { recordStep(taskDir, g[1], false); return } }
+    if (reps.every((r) => r.ok)) recordStep(taskDir, "1.4", true)
+    return
+  }
+  const g = FLOW_GATES.find(([p]) => reps[0]?.title.startsWith(p))
+  if (g && !skipped(reps[0])) recordStep(taskDir, g[1], reps.every(passed))
+}
+
+function writeTier(taskDir, tier, reason, suggested = null) {
   const tj = readTaskJson(taskDir)
   if (!tj) fail2(`task.json not found / not valid JSON in ${relative(ROOT, taskDir)}`)
   const meta = tj.data.meta && typeof tj.data.meta === "object" ? tj.data.meta : {}
   meta.plus_tier = tier
   if (reason) meta.plus_tier_reason = reason; else delete meta.plus_tier_reason
+  if (suggested) { meta.plus_tier_suggested = suggested; meta.plus_tier_override = true } else { delete meta.plus_tier_suggested; delete meta.plus_tier_override }
+  meta.plus_flow = buildFlow(tier, meta.plus_flow)
   tj.data.meta = meta
   writeFileSync(tj.path, JSON.stringify(tj.data, null, 2) + (tj.raw.endsWith("\n") ? "\n" : ""))
 }
@@ -507,19 +571,12 @@ function cmdTier(taskDir, value, opts, cfg) {
   // The tier is a human call, but the cheap facts are checked: S/M cannot cover Service/Controller work beyond their limit.
   const changed = (() => { const r = git(["diff", "--name-only", "--diff-filter=ACMR", "--relative", "HEAD"]); const u = git(["ls-files", "--others", "--exclude-standard"]); return [...new Set([...(r.ok ? r.out.split("\n") : []), ...(u.ok ? u.out.split("\n") : [])].filter(Boolean))].map(toPosix) })()
   const sc = svcCtlChanges(changed, cfg)
-  if (t === "S" && sc.length) {
-    console.error(`trellis-plus gate: tier S refused — ${sc.length} Service/Controller file(s) are already changed (${sc.slice(0, 3).join(", ")}${sc.length > 3 ? ", …" : ""}). Use M or L.`)
-    return 1
-  }
-  if (t === "M") {
-    const mods = new Set(sc.map(moduleOf))
-    if (sc.length > cfg.tiers.maxClassesM || mods.size > 1) {
-      console.error(`trellis-plus gate: tier M refused — ${sc.length} Service/Controller file(s) in ${mods.size} module(s) (limit ${cfg.tiers.maxClassesM} files, 1 module). Use L.`)
-      return 1
-    }
-  }
-  writeTier(taskDir, t, reason)
-  console.log(`tier ${t} set for ${relative(ROOT, taskDir)}${reason ? ` — ${reason}` : ""}\n  ${t === "S" ? "S: prd.md only; unit-test gate and pre-commit hook still apply (a Service/Controller change is refused)." : t === "M" ? `M: prd.md + design.md + implement.md, no independent review; max ${cfg.tiers.maxClassesM} Service/Controller classes in one module.` : "L: full flow with independent design review."}`)
+  // The tier is the human's call and is kept. The cheap facts only produce a recommendation (stored next to it as audit trail).
+  const suggested = suggestTier(sc, cfg)
+  const below = TIER_RANK[suggested] > TIER_RANK[t]
+  if (below) console.log(`  ! WARN  tier ${t} is below the suggested ${suggested}: ${sc.length} Service/Controller file(s) in ${new Set(sc.map(moduleOf)).size} module(s) changed (suggested: S none, M up to ${cfg.tiers.maxClassesM} files in 1 module, otherwise L). Your choice is kept: tier ${t}.`)
+  writeTier(taskDir, t, reason, below ? suggested : null)
+  console.log(`tier ${t} set for ${relative(ROOT, taskDir)}${reason ? ` — ${reason}` : ""}\n  ${t === "S" ? "S: prd.md only; the unit-test gate and the commit hook still apply to every changed Service/Controller." : t === "M" ? `M: prd.md + design.md + implement.md, no independent design review (L only); suggested size: up to ${cfg.tiers.maxClassesM} Service/Controller classes in one module.` : "L: full flow with independent design review."}`)
   return 0
 }
 
@@ -813,7 +870,7 @@ function lintPlan(taskDir, cfg, ti = taskTier(taskDir)) {
   for (const [f, why] of exempt) rep.warn(`EXEMPT ${f} — ${why} (needs human sign-off)`)
   if (ti.tier === "M") {
     const mods = new Set([...needTest.values()].map(moduleOf))
-    if (needTest.size > cfg.tiers.maxClassesM || mods.size > 1) rep.error(`tier M allows at most ${cfg.tiers.maxClassesM} Service/Controller classes in one module (this plan: ${needTest.size} in ${mods.size}) — raise the tier: \`gate tier <task> L\``)
+    if (needTest.size > cfg.tiers.maxClassesM || mods.size > 1) rep.warn(`tier M (your choice, kept) covers ${needTest.size} Service/Controller class(es) in ${mods.size} module(s); suggested size: up to ${cfg.tiers.maxClassesM} in one module`)
   }
   const matrix = findSection(iSecs, "测试矩阵")
   const mrows = matrix ? parseTable(matrix.body) : []
@@ -911,7 +968,7 @@ const RESOLUTION_RE = /^\s*[-*]\s*#(\d+)\s+(采纳|驳回)\s*[—–:：-]+\s*(.
 function designReview(taskDir, cfg, ti = taskTier(taskDir)) {
   const rep = new Report(`design-review  ${relative(ROOT, taskDir)}`)
   if (needTier(rep, ti)) return rep
-  if (ti.tier !== "L") { rep.note(`tier ${ti.tier}: independent design review is not required`); return rep }
+  if (ti.tier !== "L") { rep.note(`tier ${ti.tier}: independent design review is not required (L only) — skip step 1.7, do not dispatch plus-design-reviewer`); return rep }
   const rdir = join(taskDir, "reviews")
   const report = read(join(rdir, "design-review.md"))
   if (report === null) {
@@ -1224,10 +1281,10 @@ function testGate(taskDir, cfg, opts = {}) {
   // Tier limits: S never changes Service/Controller code; M stays small (<= maxClassesM classes, one module).
   if (ti && !ti.unset && concrete.length > 0) {
     const label = ti.legacy && ti.tier === "S" ? "marked lightweight" : `tier ${ti.tier}`
-    if (ti.tier === "S") rep.error(`task is ${label}${ti.reason ? ` (${ti.reason})` : ""} but changes ${concrete.length} Service/Controller file(s): ${concrete.slice(0, 3).join(", ")}${concrete.length > 3 ? ", …" : ""}.\n      Tier S is not allowed here — raise it: \`gate tier <task> M|L\`, then \`gate seed <task>\` and write design.md / implement.md`)
+    if (ti.tier === "S") rep.warn(`task is ${label}${ti.reason ? ` (${ti.reason})` : ""} but changes ${concrete.length} Service/Controller file(s): ${concrete.slice(0, 3).join(", ")}${concrete.length > 3 ? ", …" : ""} — tier S is your choice and is kept; the unit-test rules above still apply`)
     else if (ti.tier === "M") {
       const mods = new Set(concrete.map(moduleOf))
-      if (concrete.length > cfg.tiers.maxClassesM || mods.size > 1) rep.error(`tier M allows at most ${cfg.tiers.maxClassesM} Service/Controller classes in one module; this change has ${concrete.length} in ${mods.size} module(s) — raise the tier: \`gate tier <task> L\``)
+      if (concrete.length > cfg.tiers.maxClassesM || mods.size > 1) rep.warn(`tier M (your choice, kept): this change has ${concrete.length} Service/Controller class(es) in ${mods.size} module(s); suggested size: up to ${cfg.tiers.maxClassesM} in one module`)
     }
   }
   return { rep, groups }
@@ -1566,6 +1623,7 @@ function main() {
   const taskArg = pos[1]
   let code = 0
   const reps = []
+  let flowTask = null // the task whose gate result goes into task.json meta.plus_flow
 
   switch (cmd) {
     case "tier": return process.exit(cmdTier(resolveTask(taskArg), pos[2], opts, cfg))
@@ -1576,20 +1634,21 @@ function main() {
     case "matrix": return process.exit(cmdMatrix(resolveTask(taskArg), opts))
     case "hash": console.error("`hash` was removed in v2 (the review is no longer bound to a document hash)"); return process.exit(2)
     case "gates": return process.exit(cmdGates(cfg))
-    case "align": reps.push(runGate("align", cfg, "align", () => alignGate(resolveTask(taskArg), cfg))); break
-    case "anchors": reps.push(anchorsGate(resolveTask(taskArg), cfg)); break
-    case "lint-plan": reps.push(runGate("lintPlan", cfg, "lint-plan", () => lintPlan(resolveTask(taskArg), cfg))); break
-    case "design-review": reps.push(runGate("designReview", cfg, "design-review", () => designReview(resolveTask(taskArg), cfg))); break
-    case "pre-start": reps.push(...preStart(resolveTask(taskArg), cfg)); break
+    case "align": flowTask = resolveTask(taskArg); reps.push(runGate("align", cfg, "align", () => alignGate(flowTask, cfg))); break
+    case "anchors": flowTask = resolveTask(taskArg); reps.push(anchorsGate(flowTask, cfg)); break
+    case "lint-plan": flowTask = resolveTask(taskArg); reps.push(runGate("lintPlan", cfg, "lint-plan", () => lintPlan(flowTask, cfg))); break
+    case "design-review": flowTask = resolveTask(taskArg); reps.push(runGate("designReview", cfg, "design-review", () => designReview(flowTask, cfg))); break
+    case "pre-start": flowTask = resolveTask(taskArg); reps.push(...preStart(flowTask, cfg)); break
     case "test": {
       const t = taskFromOpts(opts)
+      if (opts.run) flowTask = t // only the formal run (step 2.4) counts for the flow record
       if (gateMode(cfg, "test") === "off") { reps.push(skippedReport("test-gate", "test")); break }
       const { rep, groups } = testGate(t, cfg, { base: opts.base, staged: !!opts.staged })
       reps.push(applyMode(rep, cfg, "test"))
       if (opts.run && rep.ok) reps.push(runTests(groups, cfg))
       break
     }
-    case "ocr": reps.push(runGate("ocr", cfg, "ocr-gate", () => ocrGate(taskFromOpts(opts), cfg, opts))); break
+    case "ocr": flowTask = taskFromOpts(opts); reps.push(runGate("ocr", cfg, "ocr-gate", () => ocrGate(flowTask, cfg, opts))); break
     case "pre-commit": {
       const hook = !!opts.hook
       if (hook && process.env.TRELLIS_PLUS_SKIP_GATE) { console.log("trellis-plus pre-commit: TRELLIS_PLUS_SKIP_GATE is set — skipped"); return process.exit(0) }
@@ -1611,7 +1670,7 @@ function main() {
       }
       if (cfg.ocr.enabled && cfg.ocr.required) reps.push(runGate("ocr", cfg, "ocr-gate", () => ocrGate(t, cfg, { ...opts, run: false, staged, hook })))
       for (const r of reps) { r.print(); if (!r.ok) code = 1 }
-      if (code && hook && gateMode(cfg, "hook") === "warn") { console.log("\ntrellis-plus pre-commit: (gates.hook=warn) the checks above would block this commit; letting it through"); return process.exit(0) }
+      if (code && hook && gateMode(cfg, "hook") === "warn") { console.log(`\ntrellis-plus pre-commit: (hook=warn, ${gateInfo(cfg, "hook").from}) the checks above would block this commit; letting it through`); return process.exit(0) }
       if (code && hook) {
         console.error(`\ntrellis-plus: commit blocked by the pre-commit hook.${t ? `\n  OCR:  node .trellis/plus/gate.mjs ocr --task ${relative(ROOT, t)} --run   (then triage reviews/ocr-triage.md)` : ""}\n  Tests: node .trellis/plus/gate.mjs test${t ? ` --task ${relative(ROOT, t)}` : ""} --run\n  Deliberate bypass (sparingly): TRELLIS_PLUS_SKIP_GATE=1 git commit …   or   git commit --no-verify`)
       }
@@ -1622,6 +1681,7 @@ function main() {
       return process.exit(cmd ? 2 : 0)
   }
   for (const r of reps) { r.print(); if (!r.ok) code = 1 }
+  recordFlow(cmd, flowTask, reps)
   process.exit(code)
 }
 

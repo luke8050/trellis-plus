@@ -1059,7 +1059,7 @@ rm -f svc-a/src/test/java/x/BServiceTest.java; git checkout -q -- svc-b/src/test
 rm -f svc-b/src/test/java/x/BServiceTest.java; : > "$FAKE_MVN_LOG"
 check "--run: static findings stop before maven" 1 "no unit test found" $G test --task "$T" --run
 LAST="$(wc -c < "$FAKE_MVN_LOG" | tr -d ' ')"; has "...maven was not called" "^0$"
-reverse "no maven run after a failing static check" 1 'if (opts.run && rep.ok) reps.push(runTests(groups, cfg))' 'if (opts.run) reps.push(runTests(groups, cfg))' chk 0 - bash -c ": > $FAKE_MVN_LOG; node $W/.trellis/plus/gate.mjs test --task $T --run >/dev/null 2>&1; [ ! -s $FAKE_MVN_LOG ]"
+reverse "no maven run after a failing static check" 1 'if (opts.run && ok) reps.push(runTests(groups, cfg))' 'if (opts.run) reps.push(runTests(groups, cfg))' chk 0 - bash -c ": > $FAKE_MVN_LOG; node $W/.trellis/plus/gate.mjs test --task $T --run >/dev/null 2>&1; [ ! -s $FAKE_MVN_LOG ]"
 git checkout -q -- svc-b/src/test/java/x/BServiceTest.java; echo "// e" >> svc-b/src/test/java/x/BServiceTest.java
 # maven failures propagate
 export FAKE_MVN_FAIL=1; check "a failing mvn run fails the gate and names the module" 1 'test command for module "svc-a" exited with 1' $G test --task "$T" --run; unset FAKE_MVN_FAIL
@@ -1436,9 +1436,9 @@ cp "$AG" "$WORK/agent.bad2"; edit "$WORK/agent.bad2" "需人工确认：<需人�
 check "reverse: an agent without the 需人工确认 header line is rejected" 1 "missing: \^需人工确认：<" agent_ok "$WORK/agent.bad2"
 # token budget of the per-project workflow blocks (v1.1: 9511 bytes) and the per-turn breadcrumbs (checked in A)
 wf_bytes() { cat "$1/assets/workflow/index.md" "$1/assets/workflow/phase1.md" "$1/assets/workflow/phase2.md" | wc -c | tr -d ' '; }
-wf_budget() { [ "$(wf_bytes "$1")" -le 7000 ]; }
+wf_budget() { [ "$(wf_bytes "$1")" -le 8000 ]; }
 LAST="$(wf_bytes "$TOOL")"; has "workflow blocks total $LAST bytes (v1.1: 9511)" "^[0-9]+$"
-check "workflow blocks stay within 7000 bytes (regression line for the token goal)" 0 - wf_budget "$TOOL"
+check "workflow blocks stay within 8000 bytes (regression line for the token goal; raised from 7000 for the bugfix flow)" 0 - wf_budget "$TOOL"
 sec3_clean() { local d="$1" f
   for f in "$d/assets/plus/templates/design.md" "$d/assets/spec/plus-doc-samples/design.md"; do
     sed -n '/^## 3 /,/^## 4 /p' "$f" | grep -qE '^\| 方案 \|' && return 1
@@ -1552,8 +1552,8 @@ PY2
 }
 cp "$W/.trellis/plus/plus.config.json" "$WORK/n.cfg"
 T="$(mkplan sw L)"
-check "gates lists all 7 gates; the default profile is standard" 0 "profile: standard" $G gates
-LAST="$($G gates 2>&1)"; [ "$(echo "$LAST" | grep -cE '^  [a-zA-Z]+ +error ')" = "4" ] && [ "$(echo "$LAST" | grep -cE '^  designReview +warn ')" = "1" ] && [ "$(echo "$LAST" | grep -cE '^  hook +warn ')" = "1" ] && [ "$(echo "$LAST" | grep -cE '^  manifests +off ')" = "1" ] && ok "...standard: 4 gates error, designReview warn, hook warn, manifests off" || { bad "...standard: 4 gates error, designReview warn, hook warn, manifests off"; show; }
+check "gates lists all 8 gates; the default profile is standard" 0 "profile: standard" $G gates
+LAST="$($G gates 2>&1)"; [ "$(echo "$LAST" | grep -cE '^  [a-zA-Z]+ +error ')" = "5" ] && [ "$(echo "$LAST" | grep -cE '^  designReview +warn ')" = "1" ] && [ "$(echo "$LAST" | grep -cE '^  hook +warn ')" = "1" ] && [ "$(echo "$LAST" | grep -cE '^  manifests +off ')" = "1" ] && ok "...standard: 5 gates error (incl. bugfix), designReview warn, hook warn, manifests off" || { bad "...standard: 5 gates error (incl. bugfix), designReview warn, hook warn, manifests off"; show; }
 std_manifests_off() { setcfg '{"profile":"standard"}'; local o; o="$($G gates 2>&1)"; setcfg '{}'; echo "$o" | grep -qE '^  manifests +off '; }
 reverse "standard profile skips manifests" 1 'standard: { designReview: "warn", manifests: "off", hook: "warn" }' 'standard: { designReview: "warn", manifests: "warn", hook: "warn" }' chk 0 - std_manifests_off
 std_hook_warn() { setcfg '{"profile":"standard"}'; local o; o="$($G gates 2>&1)"; setcfg '{}'; echo "$o" | grep -qE '^  hook +warn '; }
@@ -1563,7 +1563,7 @@ strict_hook_error() { setcfg '{"profile":"strict"}'; local o; o="$($G gates 2>&1
 check "strict profile: the git hook still blocks" 0 - strict_hook_error
 setcfg '{}' # no profile key: the default comes from gate.mjs itself
 reverse "default profile is standard" 1 'profile: "standard",' 'profile: "strict",' chk 0 "profile: standard" $G gates
-setcfg '{"profile":"strict"}'; LAST="$($G gates 2>&1)"; [ "$(echo "$LAST" | grep -cE '^  [a-zA-Z]+ +error ')" = "7" ] && ok "...strict: exactly 7 gate lines with mode error" || { bad "...strict: exactly 7 gate lines with mode error"; show; }
+setcfg '{"profile":"strict"}'; LAST="$($G gates 2>&1)"; [ "$(echo "$LAST" | grep -cE '^  [a-zA-Z]+ +error ')" = "8" ] && ok "...strict: exactly 8 gate lines with mode error" || { bad "...strict: exactly 8 gate lines with mode error"; show; }
 setcfg '{}'
 has "...and says what can never be switched off" "Always on, not switchable"
 setcfg '{"profile":"light","gates":{"ocr":"error"}}'; LAST="$($G gates 2>&1)"; has "light profile: designReview off, source shown" "designReview +off +\[profile light\]"; has "...an explicit gates.ocr beats the profile" "ocr +error +\[gates.ocr\]"
@@ -1635,15 +1635,15 @@ cp "$W/.trellis/plus/plus.config.json" "$WORK/n2.cfg"; T="$(newtask "$W" nt)"
 check "strict: the Java scenario (untested controller) fails the test gate" 1 "no unit test found" $G test --task "$T"
 setcfg '{"gates":{"test":"warn"}}'
 check "gates.test=warn: findings become warnings, exit 0" 0 "gates.test=warn, would block otherwise\) .*OrderController.java" $G test --task "$T"
-reverse "test gate honours warn" 1 'reps.push(applyMode(rep, cfg, "test"))
-      if (opts.run' 'reps.push(rep)
-      if (opts.run' chk 0 "gates.test=warn" $G test --task "$T"
+reverse "test gate honours warn" 1 '        const r = testGate(t, cfg, { base: opts.base, staged: !!opts.staged })
+        reps.push(applyMode(r.rep, cfg, "test"))' '        const r = testGate(t, cfg, { base: opts.base, staged: !!opts.staged })
+        reps.push(r.rep)' chk 0 "gates.test=warn" $G test --task "$T"
 setcfg '{"gates":{"test":"off"}}'
 check "gates.test=off: skipped" 0 "skipped: test is off" $G test --task "$T"
-reverse "test off skips the gate" 1 'if (gateMode(cfg, "test") === "off") { reps.push(skippedReport("test-gate", "test")); break }' 'if (false) { reps.push(skippedReport("test-gate", "test")); break }' chk 0 "skipped: test is off" $G test --task "$T"
+reverse "test off skips the gate" 2 'if (gateMode(cfg, "test") === "off") reps.push(skippedReport("test-gate", "test"))' 'if (false) reps.push(skippedReport("test-gate", "test"))' chk 0 "skipped: test is off" $G test --task "$T"
 setcfg '{"gates":{"test":"off","ocr":"off"}}'
 check "pre-commit (CLI) with gates.test=off skips the test gate" 0 "skipped: test is off" $G pre-commit --task "$T"
-reverse "pre-commit honours test off" 1 'if (gateMode(cfg, "test") === "off") reps.push(skippedReport("test-gate", "test"))' 'if (false) reps.push(skippedReport("test-gate", "test"))' chk 0 "skipped: test is off" $G pre-commit --task "$T"
+reverse "pre-commit honours test off" 2 'if (gateMode(cfg, "test") === "off") reps.push(skippedReport("test-gate", "test"))' 'if (false) reps.push(skippedReport("test-gate", "test"))' chk 0 "skipped: test is off" $G pre-commit --task "$T"
 setcfg '{}'
 check "default profile: the hook warns and lets the commit through" 0 "\(hook=warn, profile standard\)" $G pre-commit --hook
 setcfg '{"profile":"strict"}'
@@ -2115,6 +2115,562 @@ reverse_file "--all lists every task" trellis-plus.mjs 1 'const all = flag("all"
 reverse_file "--json output" trellis-plus.mjs 1 'if (flag("json"))' 'if (false)' st_json
 reverse_file "the suggestion is shown" trellis-plus.mjs 1 '${v.suggested ? ' '${false ? ' st_suggest
 reverse_file "a completed task is all done" trellis-plus.mjs 1 'finished || x.state === "done"' 'x.state === "done"' st_done
+fi
+
+
+############################################################################################################
+
+if want V; then
+echo "== V. bugfix flow: flow / seed / bug-plan / pre-start / bug-verify / test + hook integration / ocr background / assets"
+FXO="$HERE/fixtures/ocr"; export FAKE_OCR_LOG="$WORK/ocr-v.log"
+mkproj "$WORK/v"; cd "$W"
+mkdir -p src/test/java/com/acme
+printf 'package com.acme;\nimport org.junit.jupiter.api.Test;\nclass OrderServiceTest {\n @Test void create_ok() {}\n}\n' > src/test/java/com/acme/OrderServiceTest.java
+printf 'package com.acme;\npublic class StringUtil {\n public static String trim(String s) {\n  return s == null ? "" : s.trim();\n }\n}\n' > src/main/java/com/acme/StringUtil.java
+printf 'package com.acme;\nimport org.junit.jupiter.api.Test;\nclass StringUtilTest {\n @Test void trim_ok() {}\n}\n' > src/test/java/com/acme/StringUtilTest.java
+git add -A >/dev/null 2>&1; gc -m "s baseline"
+
+# a valid bugfix.md for OrderService#create (the fixture java file; line 7 is `public Long create(OrderDTO dto) {`)
+bugdoc() { cat > "$W/$1/bugfix.md" <<'BUGX'
+# Bugfix：重复订单号被重复创建
+
+关联任务：无
+
+## 1 现象与复现
+
+| 前置条件/输入 | 期望 | 实际 |
+| --- | --- | --- |
+| 同一订单号提交两次 | 第二次被拒绝 | 创建了两条订单 |
+
+## 2 根因
+
+`OrderService.java:7#create` 创建前没有按订单号查重，直接写库，重复订单号被写入两次。
+
+## 3 修复方案
+
+在 OrderService#create 写库之前先按订单号查询，已存在则抛出 IllegalStateException 且不再写库；入参校验、返回值和事务边界保持不变，只增加这一处前置判断。
+
+## 4 允许改动文件
+
+| 文件 | 改什么 |
+| --- | --- |
+| `src/main/java/com/acme/OrderService.java` | create 增加查重 |
+| `src/test/java/com/acme/OrderServiceTest.java` | 新增回归用例 |
+
+## 5 回归测试
+
+| 测试类#方法 | 修复前（失败命令与摘要） |
+| --- | --- |
+| OrderServiceTest#create_duplicateNo_rejected | mvn -q test -Dtest=OrderServiceTest → expected IllegalStateException but nothing was thrown |
+
+## 6 影响面
+
+| 符号 | 引用数 | 处置 |
+| --- | --- | --- |
+| OrderService#create | `git grep -n "create("` → 1 | 唯一调用方 OrderController#post，行为兼容 |
+
+## 7 高风险处置
+
+无
+
+## 8 范围确认
+
+无
+BUGX
+}
+mkbug() { local t; t="$(newtask "$W" "$1")"; $G flow "$t" bugfix >/dev/null 2>&1; $G seed "$t" >/dev/null 2>&1; bugdoc "$t"; echo "$t"; }
+# the same document for StringUtil#trim (a fix that is NOT in a Service/Controller)
+bugdoc_util() { bugdoc "$1"; sed -i.bak -e 's|OrderService.java:7#create|StringUtil.java:3#trim|; s|OrderServiceTest|StringUtilTest|g; s|OrderService|StringUtil|g; s|create_duplicateNo_rejected|trim_blank_returnsEmpty|g' "$W/$1/bugfix.md"; rm -f "$W/$1/bugfix.md.bak"; }
+sfix_order() { echo "// fix" >> src/main/java/com/acme/OrderService.java; printf 'package com.acme;\nimport org.junit.jupiter.api.Test;\nclass OrderServiceTest {\n @Test void create_ok() {}\n @Test void create_duplicateNo_rejected() {}\n}\n' > src/test/java/com/acme/OrderServiceTest.java; }
+sreset() { git checkout -q -- . ; git clean -fdq src mod-a mod-b db >/dev/null 2>&1; rm -rf mod-a mod-b db; }
+setbf() { python3 - "$W/.trellis/plus/plus.config.json" "$1" "$2" <<'PYS'
+import json, sys
+f = sys.argv[1]; d = json.load(open(f, encoding="utf8")); k = sys.argv[2]
+v = json.loads(sys.argv[3])
+if k.startswith("gates."): d.setdefault("gates", {})[k[6:]] = v
+else: d.setdefault("bugfix", {})[k] = v
+json.dump(d, open(f, "w", encoding="utf8"), indent=2)
+PYS
+}
+cfgreset() { git checkout -q -- .trellis/plus/plus.config.json; }
+# setcfg is defined by group N; S must also run alone (ONLY=S)
+type setcfg >/dev/null 2>&1 || setcfg() { python3 - "$W/.trellis/plus/plus.config.json" "$1" <<'PY2'
+import json, sys
+f = sys.argv[1]; d = json.load(open(f, encoding="utf8")); d.pop("profile", None); d.pop("gates", None); d.update(json.loads(sys.argv[2])); json.dump(d, open(f, "w", encoding="utf8"), indent=2)
+PY2
+}
+flow_meta() { python3 - "$W/$1/task.json" "$2" "$3" <<'PYS'
+import json, sys
+m = json.load(open(sys.argv[1], encoding="utf8")).get("meta", {})
+want_flow = sys.argv[2] if sys.argv[2] != "-" else None; want_src = sys.argv[3] if sys.argv[3] != "-" else None
+assert m.get("plus_flow") == want_flow, m
+assert m.get("plus_bug_source") == want_src, m
+print("meta ok:", m.get("plus_flow"), m.get("plus_bug_source"))
+PYS
+}
+
+# ---------------- S1. gate flow ----------------
+SRC="$(newtask "$W" bsrc)"; $G tier "$SRC" L >/dev/null 2>&1
+TF="$(newtask "$W" bf1)"
+check "flow: a new task is a feature task" 0 "^flow: feature$" $G flow "$TF"
+check "flow bugfix --from <existing task> sets the flow and remembers the source" 0 "flow bugfix set .*\(from .*bsrc\)" $G flow "$TF" bugfix --from "$SRC"
+check "...meta.plus_flow / meta.plus_bug_source are stored in task.json" 0 "meta ok: bugfix .*bsrc" flow_meta "$TF" bugfix "$(basename "$SRC")"
+check "...and the flow is shown with its source" 0 "^flow: bugfix \(from .*bsrc\)$" $G flow "$TF"
+check "flow bugfix --from <unknown task> is a usage error" 2 "--from: task not found: nope" $G flow "$TF" bugfix --from nope
+check "flow bugfix --from <the task itself> is a usage error" 2 "--from cannot be the task itself" $G flow "$TF" bugfix --from "$TF"
+check "flow bugfix --from without a value is a usage error" 2 "--from needs the task" $G flow "$TF" bugfix --from
+check "an unknown flow value is a usage error" 2 "flow must be bugfix or feature" $G flow "$TF" hotfix
+check "flow feature clears both keys again" 0 "flow feature set" $G flow "$TF" feature
+check "...(meta has neither key)" 0 "meta ok: None None" flow_meta "$TF" - -
+check "flow bugfix without --from is allowed (no source)" 0 "flow bugfix set" $G flow "$TF" bugfix
+# flow bugfix clears plus_tier; cmdTier refuses setting S/M/L on a bugfix task
+TTIER="$(newtask "$W" bft)"; $G tier "$TTIER" S --reason "initially small" >/dev/null 2>&1
+check "flow bugfix clears an existing plus_tier" 0 "flow bugfix set" $G flow "$TTIER" bugfix
+python3 - "$W/$TTIER/task.json" <<'PYS'
+import json, sys
+m = json.load(open(sys.argv[1], encoding="utf8")).get("meta", {})
+assert "plus_tier" not in m and "plus_tier_reason" not in m, m
+PYS
+[ $? -eq 0 ] && ok "...meta.plus_tier and plus_tier_reason are removed" || bad "...meta.plus_tier and plus_tier_reason are removed"
+reverse "flow bugfix clears plus_tier" 1 '    delete meta.plus_tier
+    delete meta.plus_tier_reason' '    /* kept */' chk 0 - bash -c "cd '$W' && t=\$(ls -d .trellis/tasks/*-bft | head -1) && node .trellis/plus/gate.mjs flow \"\$t\" feature >/dev/null && node .trellis/plus/gate.mjs tier \"\$t\" S --reason 'small task' >/dev/null && node .trellis/plus/gate.mjs flow \"\$t\" bugfix >/dev/null && python3 -c \"import json,sys; m=json.load(open('\$t/task.json')).get('meta',{}); sys.exit(0 if 'plus_tier' not in m else 1)\""
+check "tier query on a bugfix task says no tier applies" 0 "flow bugfix uses no S/M/L tier" $G tier "$TTIER"
+check "tier S/M/L cannot be set on a bugfix task" 1 "task is in flow bugfix .*flow <task> feature" $G tier "$TTIER" S --reason "should fail"
+cmdtier_refuses_bf() { $G flow "$TTIER" bugfix >/dev/null 2>&1; chk 1 "task is in flow bugfix" $G tier "$TTIER" S --reason "should fail"; }
+reverse "cmdTier refuses bugfix tasks" 1 'if (taskFlow(taskDir).bugfix) {
+    if (!value)' 'if (false) {
+    if (!value)' cmdtier_refuses_bf
+reverse "flow is stored in meta" 1 '    meta.plus_flow = "bugfix"' '    meta.plus_flow = "feature"' chk 0 "^flow: bugfix$" bash -c "$G flow '$TF' bugfix >/dev/null; $G flow '$TF'"
+reverse "--from must name an existing task" 1 'if (!sd) fail2(' 'if (false) fail2(' chk 2 "task not found: nope" $G flow "$TF" bugfix --from nope
+reverse "--from cannot be the task itself" 1 'if (resolve(sd) === resolve(taskDir)) fail2(' 'if (false) fail2(' chk 2 "cannot be the task itself" $G flow "$TF" bugfix --from "$TF"
+reverse "flow feature clears the source" 1 '} else { delete meta.plus_flow; delete meta.plus_bug_source }' '} else { /* kept */ }' chk 0 "meta ok: None None" bash -c "cd '$W' && node .trellis/plus/gate.mjs flow '$TF' bugfix --from '$SRC' >/dev/null && node .trellis/plus/gate.mjs flow '$TF' feature >/dev/null && python3 -c \"import json,sys; m=json.load(open('$W/$TF/task.json')).get('meta',{}); assert 'plus_flow' not in m and 'plus_bug_source' not in m; print('meta ok: None None')\""
+
+# ---------------- S2. seed in the bugfix flow ----------------
+TS="$(newtask "$W" bf2)"; $G flow "$TS" bugfix --from "$SRC" >/dev/null 2>&1
+check "seed (bugfix) needs no tier and creates bugfix.md" 0 "created .*bugfix.md" $G seed "$TS"
+[ -f "$W/$TS/bugfix.md" ] && [ ! -f "$W/$TS/design.md" ] && [ ! -f "$W/$TS/implement.md" ] && [ ! -e "$W/$TS/research/code-map.md" ] && ok "...no design.md / implement.md / code-map" || bad "...no design.md / implement.md / code-map"
+grep -q "^关联任务：$(basename "$SRC")$" "$W/$TS/bugfix.md" && ok "...关联任务 is pre-filled from --from" || bad "...关联任务 is pre-filled from --from"
+reverse "seed pre-fills 关联任务 from --from" 1 'if (fl.source) tpl = tpl.replace(' 'if (false) tpl = tpl.replace(' chk 0 - bash -c "cd '$W' && rm -f '$W/$TS/bugfix.md' && node .trellis/plus/gate.mjs seed '$TS' >/dev/null && grep -q '^关联任务：$(basename "$SRC")$' '$W/$TS/bugfix.md'"
+LAST="$(grep -c "$TS/bugfix.md" "$W/$TS/implement.jsonl" "$W/$TS/check.jsonl" | tr '\n' ' ')"; has "...bugfix.md itself reaches both sub-agents' manifests" "implement.jsonl:1 .*check.jsonl:1"
+bugfix_in_jsonl() { local t; t="$(newtask "$W" "sbinj$RANDOM")"; $G flow "$t" bugfix >/dev/null 2>&1; $G seed "$t" >/dev/null 2>&1; grep -q 'bugfix.md' "$W/$t/implement.jsonl" && grep -q 'bugfix.md' "$W/$t/check.jsonl"; }
+reverse "bugfix.md is injected into sub-agent manifests" 1 '[relative(ROOT, dst).replace(/\\/g, "/"), "[plus] bugfix.md: root cause, minimal fix plan, allowed files and regression tests"],' '' chk 0 - bugfix_in_jsonl
+! grep -q "TBD" "$W/$TS/prd.md" && grep -q "bugfix.md" "$W/$TS/prd.md" && ok "...untouched Trellis prd.md TBD skeleton is replaced with a pointer to bugfix.md" || bad "...untouched Trellis prd.md TBD skeleton is replaced with a pointer to bugfix.md"
+prd_replaced_ok() { local t; t="$(newtask "$W" "sbprd$RANDOM")"; $G flow "$t" bugfix >/dev/null 2>&1; $G seed "$t" >/dev/null 2>&1; ! grep -q 'TBD' "$W/$t/prd.md" && grep -q 'bugfix.md' "$W/$t/prd.md"; }
+reverse "untouched prd.md skeleton is replaced for bugfix" 1 'if (curPrd !== null && PRD_SKELETON_RE.test(curPrd)' 'if (false && PRD_SKELETON_RE.test(curPrd)' chk 0 - prd_replaced_ok
+LAST="$(grep -c 'plus-testing-guide' "$W/$TS/implement.jsonl" "$W/$TS/check.jsonl" | tr '\n' ' ')"; has "...the unit-test guide is registered once per manifest" "implement.jsonl:1 .*check.jsonl:1"
+LAST="$(grep -c "$(basename "$SRC")/prd.md" "$W/$TS/implement.jsonl" "$W/$TS/check.jsonl" | tr '\n' ' ')"; has "...the source task's prd.md reaches both sub-agents' manifests" "implement.jsonl:1 .*check.jsonl:1"
+check "seed twice keeps bugfix.md and does not duplicate entries" 0 "bugfix.md exists — kept" $G seed "$TS"
+LAST="$(grep -c 'plus-testing-guide' "$W/$TS/implement.jsonl")"; has "...(still exactly one guide entry)" "^1$"
+seed_bug_ok() { local t; t="$(newtask "$W" "sb$RANDOM")"; $G flow "$t" bugfix >/dev/null 2>&1; $G seed "$t" >/dev/null 2>&1; [ -f "$W/$t/bugfix.md" ] && [ ! -f "$W/$t/design.md" ]; }
+chk 0 - seed_bug_ok && ok "seed helper holds on the intact gate" || bad "seed helper holds on the intact gate"
+reverse "seed branches on the flow" 1 'if (taskFlow(taskDir).bugfix) return seedBugfix(taskDir)' 'if (false) return seedBugfix(taskDir)' chk 0 - seed_bug_ok
+src_in_jsonl() { local t; t="$(newtask "$W" "sj$RANDOM")"; $G flow "$t" bugfix --from "$SRC" >/dev/null 2>&1; $G seed "$t" >/dev/null 2>&1; grep -q "$(basename "$SRC")/prd.md" "$W/$t/implement.jsonl"; }
+chk 0 - src_in_jsonl && ok "source-task helper holds on the intact gate" || bad "source-task helper holds on the intact gate"
+reverse "the source task's prd.md / design.md are injected" 1 'if (srcDir) for (const f of ["prd.md", "design.md"])' 'if (false) for (const f of ["prd.md", "design.md"])' chk 0 - src_in_jsonl
+LAST="$(sed 's/【填写[^】]*】//g' "$TOOL/assets/plus/templates/bugfix.md" | python3 -c 'import re,sys; t=re.sub(r"<!--.*?-->","",sys.stdin.read(),flags=re.S); print("HIT" if re.search(r"\bTBD\b|\bTODO\b|\bXXX\b|待补充|待定|\{\{[^}]*\}\}",t) else "CLEAN")')"; has "template bugfix.md: instruction text contains no placeholder keyword" "^CLEAN$"
+
+# ---------------- S3. bug-plan ----------------
+TP="$(mkbug bp)"
+check "bug-plan: a complete bugfix.md passes" 0 "2 allowed file\(s\), 1 regression test\(s\)" $G bug-plan "$TP"
+TU="$(newtask "$W" bpu)"; $G flow "$TU" bugfix >/dev/null 2>&1; $G seed "$TU" >/dev/null 2>&1
+check "bug-plan: the unfilled template fails (placeholders)" 1 "bugfix.md:[0-9]+ unresolved placeholder" $G bug-plan "$TU"
+check "bug-plan on a feature task is refused" 1 "task is not a bugfix-flow task" $G bug-plan "$SRC"
+TN="$(newtask "$W" bpn)"; $G flow "$TN" bugfix >/dev/null 2>&1
+check "bug-plan without bugfix.md fails" 1 "bugfix.md missing" $G bug-plan "$TN"
+reverse "bug-plan needs a bugfix-flow task" 1 'if (!fl.bugfix) { rep.error("task is not a bugfix-flow task — run' 'if (false) { rep.error("task is not a bugfix-flow task — run' chk 1 "task is not a bugfix-flow task" $G bug-plan "$SRC"
+reverse "bug-plan needs bugfix.md" 1 'if (raw === null) { rep.error("bugfix.md missing — run `gate seed <task>`, then fill it (skill plus-bugfix)"); return rep }' 'if (raw === null) { raw = "" }' chk 1 "bugfix.md missing" $G bug-plan "$TN"
+reverse "placeholders are errors" 1 '  placeholders("bugfix.md", txt, rep)
+' '' chk 1 "unresolved placeholder" $G bug-plan "$TU"
+
+P="$W/$TP/bugfix.md"; goodb() { bugdoc "$TP"; }
+dropsection "$P" "## 3 修复方案"
+check "a missing required section fails" 1 'bugfix.md missing section "## 3 修复方案"' $G bug-plan "$TP"
+reverse "required sections" 1 'if (!s) rep.error(`bugfix.md missing section' 'if (false) rep.error(`bugfix.md missing section' chk 1 'missing section "## 3 修复方案"' $G bug-plan "$TP"
+goodb; python3 - "$P" <<'PYS'
+import sys
+f = sys.argv[1]; s = open(f, encoding="utf8").read(); a = s.index("## 7 高风险处置"); b = s.index("## 8 范围确认")
+open(f, "w", encoding="utf8").write(s[:a] + "## 7 高风险处置\n\n" + s[b:])
+PYS
+check "an empty section fails (影响面 / 高风险处置: write 无：原因)" 1 'section "7 高风险处置" is empty \(write 无' $G bug-plan "$TP"
+reverse "empty section check" 1 'else if (s.body.replace(/\s+/g, "").length === 0) rep.error(' 'else if (false) rep.error(' chk 1 "is empty" $G bug-plan "$TP"
+
+goodb; editall "$P" '`OrderService.java:7#create` 创建前' '创建前'
+check "a root cause without a code anchor fails" 1 "cite the root cause as a code anchor" $G bug-plan "$TP"
+reverse "root cause needs an anchor" 1 'seen) === 0) rep.error(' 'seen) === 99) rep.error(' chk 1 "cite the root cause as a code anchor" $G bug-plan "$TP"
+goodb; editall "$P" "OrderService.java:7#create" "OrderService.java:30#create"
+check "a root-cause anchor with a line out of range fails" 1 "bugfix.md 根因: anchor .*OrderService.java:30#create — line out of range" $G bug-plan "$TP"
+goodb; editall "$P" "OrderService.java:7#create" "OrderService.java:7#placeOrderV2"
+check "a root-cause anchor with a hallucinated symbol fails" 1 'symbol "placeOrderV2" not found within' $G bug-plan "$TP"
+reverse "root-cause anchors are verified" 1 'verifyAnchors(rc.body, "bugfix.md 根因", rep, cfg.planning, seen)' 'seen.size' chk 1 'symbol "placeOrderV2" not found within' $G bug-plan "$TP"
+goodb; editall "$P" "OrderService#create 写库之前先按订单号查询" "OrderService.java:30#create 写库之前先按订单号查询"
+check "an anchor in the fix plan is verified too" 1 "bugfix.md 修复方案: anchor .*:30#create — line out of range" $G bug-plan "$TP"
+reverse "fix-plan anchors are verified" 1 'verifyAnchors(fp.body, "bugfix.md 修复方案", rep, cfg.planning, new Set())' '0' chk 1 "bugfix.md 修复方案: anchor" $G bug-plan "$TP"
+
+goodb; python3 - "$P" <<'PYS'
+import sys
+f = sys.argv[1]; s = open(f, encoding="utf8").read(); a = s.index("在 OrderService#create 写库之前"); b = s.index("## 4 允许改动文件")
+open(f, "w", encoding="utf8").write(s[:a] + "改一下查重逻辑。\n\n" + s[b:])
+PYS
+check "a fix plan that says too little fails (the plan must be written out)" 1 "修复方案 is too short" $G bug-plan "$TP"
+reverse "fix plan length" 1 '.length < 40) rep.error("bugfix.md 修复方案 is too short' '.length < 0) rep.error("bugfix.md 修复方案 is too short' chk 1 "修复方案 is too short" $G bug-plan "$TP"
+
+goodb; editall "$P" "| 同一订单号提交两次 | 第二次被拒绝 | 创建了两条订单 |" "| 同一订单号提交两次 | 第二次被拒绝 | |"
+check "a reproduction row with an empty cell fails" 1 "every row needs 前置条件/输入, 期望 and 实际" $G bug-plan "$TP"
+reverse "reproduction cells" 1 'Object.values(r).some((v) => !String(v).trim())' 'false' chk 1 "every row needs 前置条件" $G bug-plan "$TP"
+
+goodb; editall "$P" "src/main/java/com/acme/OrderService.java\` | create 增加查重" "src/main/java/com/acme/Ghost.java\` | create 增加查重"
+check "an allowed file that does not exist fails" 1 'Ghost.java` does not exist' $G bug-plan "$TP"
+editall "$P" "Ghost.java\` | create 增加查重" "Ghost.java\` | 新增 create 增加查重"
+check "...the same file marked 新增 passes" 0 "PASS" $G bug-plan "$TP"
+goodb; editall "$P" "src/main/java/com/acme/OrderService.java\` | create 增加查重" "src/main/java/com/acme/Ghost.java\` | create 增加查重"
+reverse "allowed files must exist unless 新增" 1 'if (a.cands.length === 0 && !a.isNew) rep.error(' 'if (false) rep.error(' chk 1 "does not exist" $G bug-plan "$TP"
+goodb; editall "$P" "src/main/java/com/acme/OrderService.java\`" "OrderService.java\`"
+check "a bare file name in 允许改动文件 resolves" 0 "PASS" $G bug-plan "$TP"
+goodb; python3 - "$P" <<'PYS'
+import sys
+f = sys.argv[1]; s = open(f, encoding="utf8").read(); a = s.index("| 文件 | 改什么 |"); b = s.index("## 5 回归测试")
+open(f, "w", encoding="utf8").write(s[:a] + "改 OrderService 的 create 方法即可。\n\n" + s[b:])
+PYS
+check "允许改动文件 without a table fails" 1 "needs a table \(文件 \| 改什么\)" $G bug-plan "$TP"
+reverse "allowed files table" 1 'if (al.length === 0) rep.error(' 'if (false) rep.error(' chk 1 "needs a table" $G bug-plan "$TP"
+
+goodb; editall "$P" "| OrderServiceTest#create_duplicateNo_rejected |" "| 回归用例 |"
+check "a regression test not written as 测试类#方法 fails" 1 'is not written as 测试类#方法' $G bug-plan "$TP"
+reverse "regression test format" 2 'if (!g.cls) { rep.error(`bugfix.md 回归测试:' 'if (false) { rep.error(`bugfix.md 回归测试:' chk 1 "is not written as 测试类#方法" $G bug-plan "$TP"
+goodb; editall "$P" "OrderServiceTest#create_duplicateNo_rejected" "GhostTest#create_x"
+check "a regression test class that does not exist (and is not listed 新增) fails" 1 "test class GhostTest not found under src/test" $G bug-plan "$TP"
+editall "$P" "| 新增回归用例 |" "| 新增回归用例 |
+| \`src/test/java/com/acme/GhostTest.java\` | 新增 |"
+check "...listed as 新增 in 允许改动文件 it passes" 0 "PASS" $G bug-plan "$TP"
+goodb; editall "$P" "OrderServiceTest#create_duplicateNo_rejected" "GhostTest#create_x"
+reverse "regression test class must exist" 1 'if (testFilesOf(g.cls).length === 0 && !listed) rep.error(' 'if (false) rep.error(' chk 1 "not found under src/test" $G bug-plan "$TP"
+goodb; editall "$P" "| mvn -q test -Dtest=OrderServiceTest → expected IllegalStateException but nothing was thrown |" "| 待先红验证 |"
+check "bug-plan accepts 待先红验证 in section 5 (no code edit needed before task.py start)" 0 "PASS" $G bug-plan "$TP"
+reverse "bug-plan allows 待先红验证" 1 'if (!BEFORE_PENDING_RE.test(b) && b.replace(/\s+/g, "").length < 6)' 'if (b.replace(/\s+/g, "").length < 6)' chk 0 "PASS" $G bug-plan "$TP"
+goodb; editall "$P" "| mvn -q test -Dtest=OrderServiceTest → expected IllegalStateException but nothing was thrown |" "| |"
+check "a regression test without 待先红验证 or before-fix result fails" 1 'needs either "待先红验证" .* or the before-fix result' $G bug-plan "$TP"
+reverse "before-fix evidence" 1 'if (!BEFORE_PENDING_RE.test(b) && b.replace(/\s+/g, "").length < 6) rep.error(' 'if (false) rep.error(' chk 1 "before-fix result" $G bug-plan "$TP"
+# bug-plan pre-checks scale and high-risk files listed in section 4 (before coding starts)
+goodb; editall "$P" "| 新增回归用例 |" "| 新增回归用例 |
+| \`pom.xml\` | 新增依赖 |"
+check "bug-plan pre-checks planned pom.xml without 7 高风险处置 -> fails" 1 "high-risk change \(build file \(pom.xml / build.gradle\)\)" $G bug-plan "$TP"
+editall "$P" "## 7 高风险处置
+
+无" "## 7 高风险处置
+
+新增 pom 依赖用于修 bug；回滚：删除该依赖；兼容：无破坏"
+check "...with 7 高风险处置 filled, bug-plan passes" 0 "PASS" $G bug-plan "$TP"
+goodb; editall "$P" "| 新增回归用例 |" "| 新增回归用例 |
+| \`src/main/java/com/acme/AService.java\` | 新增 1 |
+| \`src/main/java/com/acme/BService.java\` | 新增 2 |
+| \`src/main/java/com/acme/CService.java\` | 新增 3 |"
+check "bug-plan pre-checks >3 planned Service/Controller files -> fails without confirmed 7 高风险处置" 1 "not a minimal fix: 4 Service/Controller file\(s\)" $G bug-plan "$TP"
+reverse "bug-plan pre-checks scale/risk" 1 'checkBugfixScaleAndRisk(plannedFiles, secs, cfg, rep, "bug-plan")' '0' chk 1 "not a minimal fix" $G bug-plan "$TP"
+editall "$P" "## 7 高风险处置
+
+无" "## 7 高风险处置
+
+公共状态机跨类修复；回滚：整组提交回退；兼容：接口不变（用户确认：张三 2026-11-19）"
+check "...escalated with confirmed 7 高风险处置 (用户确认), bug-plan passes" 0 "high-risk bugfix escalated .*confirmed in bugfix.md 7 高风险处置" $G bug-plan "$TP"
+reverse "escalation requires 用户确认 in section 7" 1 'return { ok, confirmed: ok && USER_CONFIRM_RE.test(hr) }' 'return { ok, confirmed: ok }' chk 1 "not a minimal fix" bash -c "cd '$W' && cp '$P' '$P.bk' && sed -i.s 's/（用户确认：张三 2026-11-19）//' '$P' && rm -f '$P.s' && node .trellis/plus/gate.mjs bug-plan '$TP'; rc=\$?; mv '$P.bk' '$P'; exit \$rc"
+goodb; python3 - "$P" <<'PYS'
+import sys
+f = sys.argv[1]; s = open(f, encoding="utf8").read(); a = s.index("| 测试类#方法 |"); b = s.index("## 6 影响面")
+open(f, "w", encoding="utf8").write(s[:a] + "补一个单测。\n\n" + s[b:])
+PYS
+check "a bug fix without any regression test row fails (a unit test is mandatory)" 1 "needs a table row per test" $G bug-plan "$TP"
+reverse "a regression test is mandatory" 1 'if (rg.length === 0) rep.error("bugfix.md 回归测试: needs' 'if (false) rep.error("bugfix.md 回归测试: needs' chk 1 "needs a table row per test" $G bug-plan "$TP"
+
+goodb; editall "$P" "| 唯一调用方 OrderController#post，行为兼容 |" "| |"
+check "an impact row without 处置 fails" 1 'OrderService#create" has no 处置' $G bug-plan "$TP"
+reverse "impact disposition" 1 'if (!col(r, ["处置"]).trim()) {' 'if (false) {' chk 1 "has no 处置" $G bug-plan "$TP"
+goodb; editall "$P" '`git grep -n "create("` → 1' '`git grep -n "create("` → 7'
+check "7 references without 高风险 fails" 1 'has 7 references \(>= 5\) — mark it 高风险' $G bug-plan "$TP"
+editall "$P" "| 唯一调用方 OrderController#post，行为兼容 |" "| 高风险：调用方靠回归用例保持兼容 |"
+check "...marked 高风险 passes" 0 "PASS" $G bug-plan "$TP"
+goodb; editall "$P" '`git grep -n "create("` → 1' '`git grep -n "create("` → 7'
+reverse "high-risk references" 1 'n >= cfg.planning.highRiskRefs &&' 'false &&' chk 1 "has 7 references" $G bug-plan "$TP"
+goodb; python3 - "$W/$TP/task.json" <<'PYS'
+import json, sys
+f = sys.argv[1]; d = json.load(open(f)); d["meta"]["plus_bug_source"] = "no-such-task"; json.dump(d, open(f, "w"), indent=2)
+PYS
+check "a source task that is not there only warns" 0 "WARN +source task no-such-task" $G bug-plan "$TP"
+reverse "source task warning" 1 'if (fl.source && !taskDirByName(fl.source)) rep.warn(' 'if (false) rep.warn(' chk 0 "WARN +source task" $G bug-plan "$TP"
+goodb
+
+# ---------------- S4. pre-start, status and the feature gates ----------------
+TH="$(mkbug hs)"
+check "pre-start: a bugfix task needs no tier, no prd.md, no align" 0 "== bug-plan" $G pre-start "$TH"
+LAST="$($G pre-start "$TH" 2>&1)"; hasnt "...and runs neither align, lint-plan nor design-review" "== align|== lint-plan|== design-review|task has no tier"
+check "pre-start: the unfilled template is refused" 1 "unresolved placeholder" $G pre-start "$TU"
+check "task.py start is refused for the unfilled bugfix task" 1 "pre-start gate failed" bash -c "cd '$W' && python3 .trellis/scripts/task.py start '$TU'"
+check "task.py start is allowed for a complete bugfix.md" 0 - bash -c "cd '$W' && python3 .trellis/scripts/task.py start '$TH'"
+check "...and meta.plus_flow survives task.py start" 0 "meta ok: bugfix None" flow_meta "$TH" bugfix -
+reverse "pre-start branches on the flow" 1 'if (taskFlow(taskDir).bugfix) return [runGate("bugfix"' 'if (false) return [runGate("bugfix"' chk 0 "== bug-plan" $G pre-start "$TH"
+reverse "pre-start runs bug-plan" 1 'return [runGate("bugfix", cfg, "bug-plan", () => bugfixPlan(taskDir, cfg)), runGate("manifests"' 'return [runGate("bugfix", cfg, "bug-plan", () => new Report("x")), runGate("manifests"' chk 1 "unresolved placeholder" $G pre-start "$TU"
+check "status: shows the flow, bug-plan and the next step" 0 "flow: bugfix" $G status "$TH"
+has "...status: bug-plan is listed as passed" "✓ bug-plan"
+has "...next step points at the fix and the gates" "next: bug-plan passes"
+check "status: an unfilled bugfix.md reports the failing bug-plan" 0 "✗ bug-plan — [0-9]+ problem" $G status "$TU"
+reverse "status branches on the flow" 1 'if (taskFlow(taskDir).bugfix) return statusBugfix(taskDir, cfg)' 'if (false) return statusBugfix(taskDir, cfg)' chk 0 "flow: bugfix" $G status "$TH"
+check "align on a bugfix task says it belongs to the feature flow" 0 "flow bugfix: this gate belongs to the feature flow" $G align "$TH"
+check "lint-plan on a bugfix task: same" 0 "flow bugfix: this gate belongs to the feature flow" $G lint-plan "$TH"
+check "design-review on a bugfix task: same" 0 "flow bugfix: this gate belongs to the feature flow" $G design-review "$TH"
+reverse "feature gates step aside for a bugfix task" 3 'if (taskFlow(taskDir).bugfix) { rep.note("flow bugfix: this gate belongs' 'if (false) { rep.note("flow bugfix: this gate belongs' chk 0 "flow bugfix: this gate belongs" $G align "$TH"
+check "a feature task is untouched: align still wants its prd.md" 1 "prd.md|对齐状态|task has no tier" $G align "$SRC"
+# anchors command verifies bugfix.md anchors for a bugfix task
+check "anchors verifies bugfix.md on a bugfix task" 0 "1 distinct anchor\(s\) verified" $G anchors "$TH"
+cp "$W/$TH/bugfix.md" "$WORK/th.bug.bak"
+editall "$W/$TH/bugfix.md" "OrderService.java:7#create" "OrderService.java:7#missingSym"
+check "anchors catches a bad anchor in bugfix.md" 1 'bugfix.md: anchor .*missingSym.* not found within' $G anchors "$TH"
+reverse "anchors scans bugfix.md for bugfix flow" 1 'const files = taskFlow(taskDir).bugfix
+    ? [["bugfix.md", "bugfix.md"]]' 'const files = false
+    ? [["bugfix.md", "bugfix.md"]]' chk 1 "missingSym" $G anchors "$TH"
+mv "$WORK/th.bug.bak" "$W/$TH/bugfix.md"
+
+# ---------------- S5. bug-verify: scope, regression test in the diff, risk signals ----------------
+TV="$(mkbug bv)"; sreset
+sfix_order
+check "bug-verify: fix + new regression test in the diff passes, no warning" 0 "ok  OrderServiceTest#create_duplicateNo_rejected  ←  src/test/java/com/acme/OrderServiceTest.java" $G bug-verify "$TV"
+LAST="$($G bug-verify "$TV" 2>&1)"; hasnt "...without any WARN" "WARN"
+sreset; echo "// fix" >> src/main/java/com/acme/OrderService.java
+check "a fix without the regression test in the diff fails" 1 "OrderServiceTest.java was not added/modified in this change — a bug fix needs a new or changed unit test" $G bug-verify "$TV"
+reverse "the regression test file must be in the diff" 1 'const t = cands.find((c) => changedSet.has(c))' 'const t = cands[0]' chk 1 "was not added/modified in this change" $G bug-verify "$TV"
+echo "// touched" >> src/test/java/com/acme/OrderServiceTest.java
+check "the test file touched but the regression method not added fails" 1 "OrderServiceTest#create_duplicateNo_rejected: the method is not in the diff" $G bug-verify "$TV"
+reverse "the regression method must be in the diff" 1 '.test(fileDiff(t, base, staged).added) && !changedMethodNames(t, base, staged).has(g.method)) {' '.test(fileDiff(t, base, staged).added) && !changedMethodNames(t, base, staged).has(g.method) && false) {' chk 1 "the method is not in the diff" $G bug-verify "$TV"
+sreset; echo "// fix" >> src/main/java/com/acme/OrderService.java
+printf 'package com.acme;\nclass OrderServiceTest {\n void create_ok() {}\n void create_duplicateNo_rejected() {}\n}\n' > src/test/java/com/acme/OrderServiceTest.java
+check "a regression test file without @Test fails" 1 "contains no JUnit test method" $G bug-verify "$TV"
+reverse "the regression test needs @Test" 1 'if (tg.requireTestAnnotation && !annRe.test(' 'if (false && !annRe.test(' chk 1 "contains no JUnit test method" $G bug-verify "$TV"
+# changing the BODY of an existing test method counts as changing the test
+sreset; echo "// fix" >> src/main/java/com/acme/OrderService.java
+printf 'package com.acme;\nimport org.junit.jupiter.api.Test;\nclass OrderServiceTest {\n @Test\n void create_ok() {\n  int x = 1;\n }\n}\n' > src/test/java/com/acme/OrderServiceTest.java
+git add -A src >/dev/null 2>&1; git -c user.email=a@b -c user.name=t commit -qm "fix: test with a body" --no-verify >/dev/null 2>&1
+echo "// fix2" >> src/main/java/com/acme/OrderService.java; sed -i.bak 's/int x = 1;/int x = 2;/' src/test/java/com/acme/OrderServiceTest.java; rm -f src/test/java/com/acme/OrderServiceTest.java.bak
+sed -i.bak 's/OrderServiceTest#create_duplicateNo_rejected/OrderServiceTest#create_ok/' "$W/$TV/bugfix.md"; rm -f "$W/$TV/bugfix.md.bak"
+check "changing the body of an existing test method counts (method-level, not only the signature line)" 0 "ok  OrderServiceTest#create_ok" $G bug-verify "$TV"
+reverse "a changed existing test method counts" 1 'changedMethodNames(t, base, staged).has(g.method)' 'false' chk 0 "ok  OrderServiceTest#create_ok" $G bug-verify "$TV"
+sreset; bugdoc "$TV"
+# bug-verify rejects 待先红验证 (must fill real failing command + summary after writing the red test)
+sfix_order; editall "$W/$TV/bugfix.md" "mvn -q test -Dtest=OrderServiceTest → expected IllegalStateException but nothing was thrown" "待先红验证"
+check "bug-verify rejects 待先红验证 in section 5 until real before-fix evidence is filled" 1 "still lacks the before-fix failure evidence" $G bug-verify "$TV"
+reverse "bug-verify requires real before-fix evidence" 1 'if (BEFORE_PENDING_RE.test(b) || b.replace(/\s+/g, "").length < 6) rep.error(' 'if (false) rep.error(' chk 1 "still lacks the before-fix failure evidence" $G bug-verify "$TV"
+bugdoc "$TV"
+
+# scope: confirm (default) blocks unconfirmed unlisted files until user confirms in 8 范围确认 or adds to 4; error is strict (4 only)
+sfix_order; echo "// other" >> src/main/java/com/acme/OrderController.java
+check "scope: a changed file outside 允许改动文件 FAILS by default (scopeLock=confirm) until user confirms" 1 "FAIL +scope: 1 changed file\(s\) are not in bugfix.md 4 允许改动文件: src/main/java/com/acme/OrderController.java" $G bug-verify "$TV"
+has "...the prompt says what to record after the user agreed" "STOP and ask the user.*8 范围确认|用户确认：<姓名/日期>"
+reverse "scopeLock=confirm blocks unconfirmed out-of-scope files" 1 'if (open.length) rep.error(`scope:' 'if (open.length) rep.warn(`scope:' chk 1 "FAIL +scope:" $G bug-verify "$TV"
+setbf scopeLock '"off"'
+run $G bug-verify "$TV"; hasnt "bugfix.scopeLock=off: no scope finding" "scope:"; exit_is "...and the verify passes" 0
+reverse "scopeLock=off skips the check" 1 'if (mode !== "off") {' 'if (true) {' chk 0 - bash -c "! node '$W/.trellis/plus/gate.mjs' bug-verify '$TV' 2>&1 | grep -q 'scope:'"
+cfgreset
+printf '\n- src/main/java/com/acme/OrderController.java — 同类入口一并修复（用户确认：张三 2026-11-14）\n' >> "$W/$TV/bugfix.md"; python3 - "$W/$TV/bugfix.md" <<'PYS'
+import sys
+f = sys.argv[1]; s = open(f, encoding="utf8").read()
+s = s.replace("## 8 范围确认\n\n无\n\n- src", "## 8 范围确认\n\n- src")
+open(f, "w", encoding="utf8").write(s)
+PYS
+run $G bug-verify "$TV"; exit_is "scope: a change confirmed in 8 范围确认 passes under confirm" 0; has "...and is noted" "confirmed by the user \(bugfix.md 8 范围确认\)"; hasnt "...with no scope failure" "FAIL +scope:"
+reverse "a confirmed file is accepted under confirm" 1 'const open = outside.filter((f) => !acked(f))' 'const open = outside' chk 0 - bash -c "! node '$W/.trellis/plus/gate.mjs' bug-verify '$TV' 2>&1 | grep -qE 'FAIL +scope:'"
+setbf scopeLock '"error"'
+check "bugfix.scopeLock=error (strict): fails even when confirmed in 8 范围确认" 1 "FAIL +scope: 1 changed file.*strict scopeLock=error" $G bug-verify "$TV"
+reverse "scopeLock=error ignores section 8 confirmation" 1 'if (mode === "error") {' 'if (false) {' chk 1 "strict scopeLock=error" $G bug-verify "$TV"
+cfgreset
+editall "$W/$TV/bugfix.md" "（用户确认：张三 2026-11-14）" "（我觉得需要）"
+check "a 范围确认 line without 用户确认 does not count (still fails)" 1 "FAIL +scope: 1 changed file" $G bug-verify "$TV"
+reverse "a confirmation must say 用户确认" 1 'if (m && USER_CONFIRM_RE.test(m[2]))' 'if (m)' chk 1 "FAIL +scope: 1 changed file" $G bug-verify "$TV"
+bugdoc "$TV"; sreset; sfix_order
+editall "$W/$TV/bugfix.md" "src/main/java/com/acme/OrderService.java\`" "OrderService.java\`"
+check "scope: a listed file written as a bare name is in scope" 0 "PASS" $G bug-verify "$TV"; bugdoc "$TV"
+printf 'package com.acme;\nimport org.junit.jupiter.api.Test;\nclass PayServiceTest { @Test void pay_ok() {} }\n' > src/test/java/com/acme/PayServiceTest.java
+run $G bug-verify "$TV"; exit_is "scope: a changed test file that is not listed is free" 0; hasnt "...no scope finding" "FAIL +scope:"
+reverse "test files are free in the scope check" 1 'const outside = changed.filter((f) => !isTestPath(f) && !listed(f))' 'const outside = changed.filter((f) => !listed(f))' chk 0 - bash -c "! node '$W/.trellis/plus/gate.mjs' bug-verify '$TV' 2>&1 | grep -qE 'FAIL +scope:'"
+reverse "listed files are in scope" 1 'const listed = (f) => al.some((a) => a.cands.includes(f) || f === a.written || f.endsWith("/" + a.written))' 'const listed = () => false' chk 0 - bash -c "! node '$W/.trellis/plus/gate.mjs' bug-verify '$TV' 2>&1 | grep -qE 'FAIL +scope:'"
+reverse "task files (.trellis / .opencode) are not part of the scope" 1 '!/^\.(trellis|opencode)\//.test(f) && ' '' chk 0 - bash -c "! node '$W/.trellis/plus/gate.mjs' bug-verify '$TV' 2>&1 | grep -qE 'FAIL +scope:'"
+
+# one fix stays small (or escalates with confirmed 7 高风险处置)
+sreset; sfix_order
+for n in A B; do printf 'package com.acme;\npublic class %sService {\n public int f() {\n  return 1;\n }\n}\n' $n > src/main/java/com/acme/${n}Service.java; done
+run $G bug-verify "$TV"; hasnt "3 Service/Controller files (OrderService + 2 more) are within the limit" "not a minimal fix"
+for n in C D; do printf 'package com.acme;\npublic class %sService {\n public int f() {\n  return 1;\n }\n}\n' $n > src/main/java/com/acme/${n}Service.java; done
+check "more than 3 Service/Controller files is not a bug fix" 1 "not a minimal fix: 5 Service/Controller file\(s\) in 1 module\(s\)" $G bug-verify "$TV"
+has "...and says how to continue (feature flow + tier L or section 7 confirmation)" "gate flow <task> feature.*gate tier <task> L"
+reverse "the Service/Controller limit of a bug fix" 1 'if (mods.size > 1 || sc.length > limit) {' 'if (false) {' chk 1 "not a minimal fix" $G bug-verify "$TV"
+sreset; sfix_order; mkdir -p mod-a/src/main/java/x mod-b/src/main/java/x; echo "<project/>" > mod-a/pom.xml; echo "<project/>" > mod-b/pom.xml
+printf 'package x;\npublic class AService {\n public int f() {\n  return 1;\n }\n}\n' > mod-a/src/main/java/x/AService.java
+printf 'package x;\npublic class BService {\n public int f() {\n  return 1;\n }\n}\n' > mod-b/src/main/java/x/BService.java
+check "a change spanning 2 Maven modules is not a bug fix" 1 "not a minimal fix: 3 Service/Controller file\(s\) in 3 module\(s\)" $G bug-verify "$TV"
+# cross-module non-Service change is also caught, and can escalate via confirmed 7 高风险处置
+sreset; sfix_order; mkdir -p mod-b/src/main/java/x; echo "<project/>" > mod-b/pom.xml
+printf 'package x;\npublic class HelperUtil { public static int f() { return 1; } }\n' > mod-b/src/main/java/x/HelperUtil.java
+check "cross-module change with non-Service file is also caught" 1 "not a minimal fix: 1 Service/Controller file\(s\) in 2 module\(s\)" $G bug-verify "$TV"
+editall "$W/$TV/bugfix.md" "| 新增回归用例 |" "| 新增回归用例 |
+| \`mod-b/pom.xml\` | 新增模块 pom |
+| \`mod-b/src/main/java/x/HelperUtil.java\` | 新增跨模块工具 |"
+editall "$W/$TV/bugfix.md" "## 7 高风险处置
+
+无" "## 7 高风险处置
+
+跨模块公共工具修复；回滚：两模块一起回退；兼容：方法签名不变（用户确认：张三 2026-11-19）"
+check "...escalated with confirmed 7 高风险处置 passes bug-verify" 0 "high-risk bugfix escalated .*confirmed in bugfix.md 7 高风险处置" $G bug-verify "$TV"
+bugdoc "$TV"; sreset
+
+# risk signals come from the diff
+sfix_order; echo "<project/>" > pom.xml
+check "a pom.xml change without 7 高风险处置 fails" 1 "high-risk change \(build file \(pom.xml / build.gradle\)\) but bugfix.md 7 高风险处置 is empty or 无" $G bug-verify "$TV"
+reverse "pom.xml is a high-risk signal" 1 'if (files.some(isBuildFile)) sig.push(' 'if (false) sig.push(' chk 1 "high-risk change" $G bug-verify "$TV"
+reverse "a high-risk change needs 7 高风险处置 (error, not a warning)" 1 'rep.error(`high-risk change (' 'rep.warn(`high-risk change (' chk 1 "FAIL +high-risk change" $G bug-verify "$TV"
+editall "$W/$TV/bugfix.md" "## 7 高风险处置
+
+无" "## 7 高风险处置
+
+无：不涉及"
+check "...'无：不涉及' is still not a handling" 1 "high-risk change" $G bug-verify "$TV"
+editall "$W/$TV/bugfix.md" "| 新增回归用例 |" "| 新增回归用例 |
+| \`pom.xml\` | 新增测试依赖 |"
+editall "$W/$TV/bugfix.md" "无：不涉及" "新增 pom 依赖只为测试；回滚：删除该依赖；兼容：运行时无影响"
+check "...a real rollback / compatibility text (with pom.xml in scope) passes" 0 "PASS" $G bug-verify "$TV"
+bugdoc "$TV"; rm -f pom.xml; mkdir -p db/migration; echo "alter table t add c int;" > db/migration/V2__add_c.sql
+check "a SQL / migration file without 7 高风险处置 fails" 1 "database script / migration" $G bug-verify "$TV"
+reverse "SQL / migration is a high-risk signal" 1 'if (files.some(isSqlOrMigration)) sig.push(' 'if (false) sig.push(' chk 1 "database script / migration" $G bug-verify "$TV"
+rm -rf db; sreset; sfix_order
+run $G bug-verify "$TV"; hasnt "an ordinary fix has no risk signal and no size warning" "risk signal:|larger than a minimal fix"
+sed -i.bak 's|^// fix$|@Transactional // fix|' src/main/java/com/acme/OrderService.java; rm -f src/main/java/com/acme/OrderService.java.bak
+check "a transaction / concurrency annotation in the diff warns (confirm with the user)" 0 "WARN +risk signal: .*@Transactional \(OrderService.java\)" $G bug-verify "$TV"
+reverse "risk signals from the diff" 1 'if (sensitive.size) rep.warn(' 'if (false) rep.warn(' chk 0 "WARN +risk signal" $G bug-verify "$TV"
+sreset; sfix_order; setbf warnLines 1
+check "a change larger than the hint warns (never blocks)" 0 "WARN +the change is larger than a minimal fix" $G bug-verify "$TV"
+reverse "diff size hint" 1 'if (srcFiles > cfg.bugfix.warnFiles || lines > cfg.bugfix.warnLines) rep.warn(' 'if (false) rep.warn(' chk 0 "larger than a minimal fix" $G bug-verify "$TV"
+cfgreset; sreset
+
+# --staged: only the index counts (what the hook sees)
+sfix_order; git add src/main/java/com/acme/OrderService.java src/test/java/com/acme/OrderServiceTest.java; echo "// unrelated" >> src/main/java/com/acme/OrderController.java
+check "--staged: the staged fix passes, an unrelated unstaged change is not looked at" 0 "staged: 2 file\(s\)" $G bug-verify "$TV" --staged
+run $G bug-verify "$TV" --staged; hasnt "...no scope finding" "scope:"
+reverse "--staged reads the index only" 1 'const changed = changedFiles(base, staged).filter(' 'const changed = changedFiles(base, false).filter(' chk 0 - bash -c "! node '$W/.trellis/plus/gate.mjs' bug-verify '$TV' --staged 2>&1 | grep -q 'scope:'"
+git reset -q; sreset
+check "bug-verify on a feature task is refused" 1 "task is not a bugfix-flow task" $G bug-verify "$SRC"
+reverse "bug-verify needs a bugfix-flow task" 1 'if (!taskFlow(taskDir).bugfix) { rep.error("task is not a bugfix-flow task — `node .trellis/plus/gate.mjs flow <task> bugfix`")' 'if (false) { rep.error("task is not a bugfix-flow task — `node .trellis/plus/gate.mjs flow <task> bugfix`")' chk 1 "task is not a bugfix-flow task" $G bug-verify "$SRC"
+
+# ---------------- S6. test gate + hook integration ----------------
+TI="$(newtask "$W" bi)"; $G flow "$TI" bugfix >/dev/null 2>&1; $G seed "$TI" >/dev/null 2>&1; bugdoc_util "$TI"
+check "bug-plan: a fix outside Service/Controller (StringUtil) is a normal bug fix" 0 "PASS" $G bug-plan "$TI"
+sreset; export FAKE_MVN_LOG="$WORK/mvn-s.log"; : > "$FAKE_MVN_LOG"
+echo "// fix" >> src/main/java/com/acme/StringUtil.java
+printf 'package com.acme;\nimport org.junit.jupiter.api.Test;\nclass StringUtilTest {\n @Test void trim_ok() {}\n @Test void trim_blank_returnsEmpty() {}\n}\n' > src/test/java/com/acme/StringUtilTest.java
+check "gate test --run: the regression test of a non-Service fix is run by Maven" 0 "ok  StringUtilTest#trim_blank_returnsEmpty" $G test --task "$TI" --run
+grep -q -- "-Dtest=StringUtilTest" "$FAKE_MVN_LOG" && ok "...and the Maven call names the regression test class" || { bad "...and the Maven call names the regression test class"; cat "$FAKE_MVN_LOG"; }
+mvn_ran() { : > "$FAKE_MVN_LOG"; node "$W/.trellis/plus/gate.mjs" test --task "$TI" --run >/dev/null 2>&1; grep -q -- "-Dtest=StringUtilTest" "$FAKE_MVN_LOG"; }
+chk 0 - mvn_ran && ok "(helper holds on the intact gate)" || bad "mvn_ran helper"
+reverse "regression test classes join the Maven run" 1 'for (const c of s) groups.get(m).add(c)' 'for (const c of []) groups.get(m).add(c)' chk 0 - mvn_ran
+git checkout -q -- src/test/java/com/acme/StringUtilTest.java
+: > "$FAKE_MVN_LOG"
+check "gate test --run: a failing bug-verify stops Maven even when testGate passes" 1 "StringUtilTest.java was not added/modified in this change" $G test --task "$TI" --run
+LAST="$(wc -c < "$FAKE_MVN_LOG" | tr -d ' ')"; has "...maven was not called when bug-verify failed" "^0$"
+bugverify_stops_mvn() {
+  printf 'package com.acme;\nimport org.junit.jupiter.api.Test;\nclass StringUtilTest {\n @Test void trim_ok() {}\n @Test void trim_blank_returnsEmpty() {}\n}\n' > "$W/src/test/java/com/acme/StringUtilTest.java"
+  echo "extra" > "$W/extra.txt"
+  : > "$FAKE_MVN_LOG"
+  node "$W/.trellis/plus/gate.mjs" test --task "$TI" --run >/dev/null 2>&1
+  local rc=$?
+  git -C "$W" checkout -q -- src/test/java/com/acme/StringUtilTest.java
+  rm -f "$W/extra.txt"
+  [ $rc -eq 1 ] && [ ! -s "$FAKE_MVN_LOG" ]
+}
+reverse "bug-verify failure blocks Maven run" 1 'if (!bugfixAddReports(t, cfg, { base: opts.base, staged: !!opts.staged }, reps, groups)) ok = false' 'bugfixAddReports(t, cfg, { base: opts.base, staged: !!opts.staged }, reps, groups)' chk 0 - bugverify_stops_mvn
+reverse "test runs bug-verify for a bugfix task" 1 'staged: !!opts.staged }, reps, groups)' 'staged: !!opts.staged }, [], groups)' chk 1 "was not added/modified in this change" $G test --task "$TI"
+# gates.test=off does NOT silently disable gates.bugfix
+setbf gates.test '"off"'
+check "gates.test=off still runs bug-verify for a bugfix task" 1 "StringUtilTest.java was not added/modified in this change" $G test --task "$TI"
+cfgreset
+# testGate ignores stale/inherited tier S on a bugfix task
+TSB="$(mkbug bts)"; python3 - "$W/$TSB/task.json" <<'PYS'
+import json, sys
+f = sys.argv[1]; d = json.load(open(f)); d.setdefault("meta", {})["plus_tier"] = "S"; json.dump(d, open(f, "w"), indent=2)
+PYS
+sreset; sfix_order
+check "testGate ignores tier S on a bugfix task" 0 "ok  OrderServiceTest#create_duplicateNo_rejected" $G test --task "$TSB"
+no_tier_warn() { local o; o="$($G test --task "$TSB" 2>&1)"; [ $? -eq 0 ] && echo "$o" | grep -q "ok  OrderServiceTest#create_duplicateNo_rejected" && ! echo "$o" | grep -q "Service/Controller file(s)"; }
+reverse "testGate skips tier limits for bugfix flow" 1 'const ti = taskDir && !taskFlow(taskDir).bugfix ? taskTier(taskDir) : null' 'const ti = taskDir ? taskTier(taskDir) : null' no_tier_warn
+sreset; echo "// fix" >> src/main/java/com/acme/StringUtil.java
+setbf gates.bugfix '"warn"'
+check "gates.bugfix=warn: the verify finding is shown but does not block" 0 "\(gates.bugfix=warn, would block otherwise\)" $G test --task "$TI"
+reverse "gates.bugfix=warn downgrades" 1 'const applied = applyMode(r.rep, cfg, "bugfix")' 'const applied = r.rep' chk 0 "gates.bugfix=warn" $G test --task "$TI"
+setbf gates.bugfix '"off"'
+run $G test --task "$TI"; hasnt "gates.bugfix=off: bug-verify is not run" "bug-verify"; exit_is "...and the test gate passes" 0
+reverse "gates.bugfix=off skips bug-verify" 1 'gateMode(cfg, "bugfix") === "off") return' 'false) return' chk 0 - bash -c "! node '$W/.trellis/plus/gate.mjs' test --task '$TI' 2>&1 | grep -q 'bug-verify'"
+cfgreset
+check "gate bug-plan / bug-verify under gates.bugfix=off are skipped" 0 "skipped: bugfix is off" bash -c "cd '$W' && python3 - <<'PYC'
+import json
+f = '.trellis/plus/plus.config.json'; d = json.load(open(f)); d.setdefault('gates', {})['bugfix'] = 'off'; json.dump(d, open(f, 'w'), indent=2)
+PYC
+node .trellis/plus/gate.mjs bug-verify '$TI'; rc=\$?; git checkout -q -- .trellis/plus/plus.config.json; exit \$rc"
+# the hook: staged files only; OCR is switched off here (covered by K); hook=error to test blocking
+sreset; setcfg '{"gates":{"ocr":"off","hook":"error"}}'
+echo "// fix" >> src/main/java/com/acme/StringUtil.java; git add src/main/java/com/acme/StringUtil.java
+check "pre-commit --hook: a staged fix without a staged regression test is blocked" 1 "FAIL +regression test StringUtilTest#trim_blank_returnsEmpty: .*was not added/modified" $G pre-commit --hook --task "$TI"
+reverse "the hook runs bug-verify for a bugfix task" 1 '{ base: opts.base, staged }, reps, groups)' '{ base: opts.base, staged }, [], groups)' chk 1 "was not added/modified" $G pre-commit --hook --task "$TI"
+printf 'package com.acme;\nimport org.junit.jupiter.api.Test;\nclass StringUtilTest {\n @Test void trim_ok() {}\n @Test void trim_blank_returnsEmpty() {}\n}\n' > src/test/java/com/acme/StringUtilTest.java; git add src/test/java/com/acme/StringUtilTest.java
+setcfg '{"gates":{"ocr":"off","hook":"error"}}'
+check "pre-commit --hook: fix + regression test staged passes" 0 "ok  StringUtilTest#trim_blank_returnsEmpty" $G pre-commit --hook --task "$TI"
+git reset -q; sreset; cfgreset
+
+# config validation
+setbf scopeLock '"strict"'
+check "an invalid bugfix.scopeLock makes every gate exit 2" 2 'bugfix.scopeLock "strict" is invalid \(use confirm \| error \| off\)' $G gates
+reverse "bugfix.scopeLock is validated" 1 'if (!SCOPE_MODES.includes(cfg.bugfix.scopeLock)) fail2(' 'if (false) fail2(' chk 2 "bugfix.scopeLock" $G gates
+cfgreset
+check "gate gates lists the bugfix gate" 0 "bugfix +error +\[profile standard\] +flow bugfix: bug-plan" $G gates
+setprof light
+check "profile light: the bugfix gate is a warning" 0 "bugfix +warn +\[profile light\]" $G gates
+reverse "light profile downgrades bugfix" 1 'ocr: "warn", bugfix: "warn", hook: "warn" }' 'ocr: "warn", hook: "warn" }' chk 0 "bugfix +warn +\[profile light\]" $G gates
+git checkout -q -- .trellis/plus/plus.config.json
+reverse "bugfix is a known gate name" 1 '  bugfix: "flow bugfix: bug-plan' '  bugfixx: "flow bugfix: bug-plan' chk 0 "bugfix +error" $G gates
+
+# ---------------- S7. ocr background of a bugfix task ----------------
+TO="$(mkbug bo)"; sreset; sfix_order
+FAKE_OCR_FINDINGS_FILE="$FXO/findings-empty.json" $G ocr --task "$TO" --run >/dev/null 2>&1
+BG="$W/$TO/reviews/ocr-background.md"
+bg_has() { grep -q "BUG FIX" "$BG" && grep -q "## Root cause" "$BG" && grep -q "OrderService.java:7#create" "$BG" && grep -q "## Fix plan" "$BG" && grep -q -- "- src/main/java/com/acme/OrderService.java" "$BG" && grep -q -- "- OrderServiceTest#create_duplicateNo_rejected" "$BG" && grep -q "Would a regression test fail without the fix" "$BG"; }
+chk 0 - bg_has && ok "ocr background of a bugfix task: root cause, fix plan, allowed files, regression tests, bug-specific instructions" || { bad "ocr background of a bugfix task"; head -30 "$BG"; }
+reverse "ocr background branches on the flow" 1 'if (taskFlow(taskDir).bugfix) return buildBugfixBackground(taskDir, cfg)' 'if (false) return buildBugfixBackground(taskDir, cfg)' chk 0 - bash -c "cd '$W' && rm -f '$W/$TO/reviews/ocr-r1.json' && FAKE_OCR_FINDINGS_FILE='$FXO/findings-empty.json' node .trellis/plus/gate.mjs ocr --task '$TO' --run >/dev/null 2>&1; grep -q 'BUG FIX' '$BG'"
+setbf backgroundMaxChars 700 >/dev/null 2>&1
+python3 - "$W/.trellis/plus/plus.config.json" <<'PYS'
+import json, sys
+f = sys.argv[1]; d = json.load(open(f)); d.setdefault("ocr", {})["backgroundMaxChars"] = 700; json.dump(d, open(f, "w"), indent=2)
+PYS
+rm -f "$W/$TO/reviews/ocr-r1.json"; FAKE_OCR_FINDINGS_FILE="$FXO/findings-empty.json" $G ocr --task "$TO" --run >/dev/null 2>&1
+bg_small() { node -e 'process.exit(require("fs").readFileSync(process.argv[1], "utf8").length <= 700 ? 0 : 1)' "$BG" && grep -q "Would a regression test fail without the fix" "$BG" && grep -q "(truncated)" "$BG"; }
+chk 0 - bg_small && ok "a small backgroundMaxChars truncates the document body, never the review instructions" || { bad "a small backgroundMaxChars truncates the body, not the instructions"; wc -c "$BG"; }
+bg_small_run() { rm -f "$W/$TO/reviews/ocr-r1.json"; FAKE_OCR_FINDINGS_FILE="$FXO/findings-empty.json" node "$W/.trellis/plus/gate.mjs" ocr --task "$TO" --run >/dev/null 2>&1; bg_small; }
+reverse "the background respects backgroundMaxChars" 1 'if (head.length + tail.length > max) head = head.slice(' 'if (false) head = head.slice(' chk 0 - bg_small_run
+# OCR delegation mode on a bugfix task points to bugfix.md (not prd.md)
+TDEL="$(mkbug bdel)"; sreset; sfix_order
+python3 - "$W/.trellis/plus/plus.config.json" <<'PYS'
+import json, sys
+f = sys.argv[1]; d = json.load(open(f)); d.setdefault("ocr", {})["mode"] = "delegate"; json.dump(d, open(f, "w"), indent=2)
+PYS
+check "ocr delegation mode on a bugfix task references bugfix.md (not prd.md)" 0 "against bugfix\.md and .*ocr-background\.md" $G ocr --task "$TDEL" --run
+reverse "ocr delegation mode uses bugfix.md for bugfix flow" 1 'const docRef = taskFlow(taskDir).bugfix ? "bugfix.md" : "prd.md"' 'const docRef = "prd.md"' chk 0 "against bugfix\.md" $G ocr --task "$TDEL" --run
+cfgreset; sreset
+
+# ---------------- S8. installed assets, workflow text, breadcrumbs ----------------
+[ -f "$W/.trellis/plus/templates/bugfix.md" ] && [ -f "$W/.opencode/skills/plus-bugfix/SKILL.md" ] && ok "apply installs templates/bugfix.md and the plus-bugfix skill" || bad "apply installs templates/bugfix.md and the plus-bugfix skill"
+run node "$TOOL/trellis-plus.mjs" doctor "$W"; exit_is "doctor passes with the new files" 0
+LAST="$(head -4 "$TOOL/assets/skills/plus-bugfix/SKILL.md")"; has "skill plus-bugfix: frontmatter name + description" "^name: plus-bugfix"
+skill_names_gate() { grep -q 'gate bug-plan\|bug-plan' "$1/assets/skills/plus-bugfix/SKILL.md" && grep -q '回归测试' "$1/assets/skills/plus-bugfix/SKILL.md" && grep -q '8 范围确认' "$1/assets/skills/plus-bugfix/SKILL.md"; }
+chk 0 - skill_names_gate "$TOOL" && ok "skill plus-bugfix tells: bug-plan, the regression test, 范围确认" || bad "skill plus-bugfix content"
+grep -q 'bugfix.md' "$TOOL/assets/patches/agent-implement.md" && grep -q 'bugfix.md' "$TOOL/assets/patches/agent-check.md" && grep -q 'bug-verify' "$TOOL/assets/workflow/phase2.md" && ok "agent-implement, agent-check and phase2 cover bugfix.md / bug-verify" || bad "agent-implement, agent-check and phase2 cover bugfix.md / bug-verify"
+wf_has_bugfix() { grep -q 'GATE flow <TASK_DIR> bugfix' "$1/assets/workflow/index.md" && grep -q 'GATE bug-plan' "$1/assets/workflow/index.md"; }
+chk 0 - wf_has_bugfix "$TOOL" && ok "workflow index block describes the bugfix flow" || bad "workflow index block describes the bugfix flow"
+reverse_file "workflow bugfix text" assets/workflow/index.md 1 'GATE flow <TASK_DIR> bugfix --from' 'GATE x <TASK_DIR> y --from' wf_has_bugfix
+grep -q 'GATE flow <TASK_DIR> bugfix' "$W/.trellis/workflow.md" && ok "...and it is in the project's workflow.md" || bad "...and it is in the project's workflow.md"
+bc_has_bugfix() { grep -q 'gate.mjs flow <TASK_DIR> bugfix' "$1/trellis-plus.mjs"; }
+chk 0 - bc_has_bugfix "$TOOL" && ok "the planning breadcrumb names the bugfix entry point" || bad "the planning breadcrumb names the bugfix entry point"
+reverse_file "breadcrumb bugfix hint" trellis-plus.mjs 1 'gate.mjs flow <TASK_DIR> bugfix --from <src>' 'gate.mjs x <TASK_DIR> y --from <src>' bc_has_bugfix
 fi
 
 echo

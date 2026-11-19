@@ -169,6 +169,23 @@ The spine of an L-tier task (the numbers are Trellis step ids, not an execution 
 
 Phases hand over through files, so start a new session per phase. `gate status <task>` prints the next step at any time.
 
+## Bug fix flow (flow bugfix)
+
+A defect of an **already committed / released feature** skips the S/M/L tier, `prd.md` and `align`: the flow is orthogonal to the tier and lives in `task.json` `meta.plus_flow`.
+
+```bash
+node ./.trellis/plus/gate.mjs flow <task> bugfix --from <task the defect came from>   # --from is optional
+node ./.trellis/plus/gate.mjs seed <task>                                             # creates bugfix.md only
+node ./.trellis/plus/gate.mjs bug-plan <task>                                         # also run before task.py start
+```
+
+One `bugfix.md`: symptom and reproduction → **root cause** (`file:line#Symbol` anchors, checked against the repo) → **fix plan** (which class/method changes, to what logic, why it removes the root cause, what stays unchanged; ≥ 40 chars) → allowed files → **regression test** (`Class#method`, must be added or changed) → impact → high-risk handling (required for pom / SQL) → scope confirmation.
+
+- `bug-plan` (before start): sections complete, root-cause anchors real, fix plan written, allowed files and regression tests exist, plus upfront scale/high-risk pre-check (pom/SQL, >3 Service/Controller or >1 module); during planning, the before-fix column may be `待先红验证` (no code changes before `task.py start`).
+- `bug-verify` (merged into `test` and `pre-commit`): (1) scope lock: `bugfix.scopeLock` defaults to `confirm`, **blocking** unlisted non-test changes until the user confirms them in section 8 or adds them to section 4; `error` is strict (section 4 only); `off` disables; test files are free. (2) **A fix must come with a unit test**: the regression test method must be in this diff (whether or not the fix is in a Service) with real before-fix failure evidence recorded in section 5, and its class joins the Maven run. (3) More than 3 Service/Controller files or >1 module requires splitting, switching to `flow feature` + tier L, or escalating with rollback/impact handling + `用户确认` in section 7; pom/SQL without section 7 fails; transaction/concurrency/cache annotations and oversized changes only warn.
+- `seed` injects `bugfix.md` (plus the source task's `prd.md`/`design.md`) into `implement.jsonl` / `check.jsonl`; OCR and the git hook work as usual with bugfix-specific OCR background.
+- Phase 2 (not done): red-green verification (run the regression test on the original code), a module-wide Maven command (`testGate.moduleCommand`).
+
 ## Gate commands
 
 `gate.mjs` is committed with the repository, so teammates never install the tool:

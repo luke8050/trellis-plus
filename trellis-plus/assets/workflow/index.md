@@ -20,6 +20,7 @@ Phase 2: 2.1 implement → 2.2 check → 2.4 Test gate → 2.5 OCR review (rerun
 Phase 3: 3.3 spec update → 3.4 commit   (the git hook checks tests + OCR triage; without a hook run `GATE pre-commit` first)
 ```
 
+- Bug fix (defect of a committed / released feature; an unfinished feature is fixed inside its own task): `GATE flow <TASK_DIR> bugfix --from <source task>` — no tier, no prd.md, no align. `GATE seed <TASK_DIR>` creates `bugfix.md` (skill `plus-bugfix`): symptom, root cause (`file:line#Symbol`), fix plan, allowed files, regression unit test. `GATE bug-plan` gates `task.py start` (pre-checks scale/risk); 2.4 `GATE test --run` also checks scope (unlisted files block until user confirms in 8 范围确认 or adds to 4) and that the regression test is in the diff; 2.5 OCR and the hook as usual. >3 Service/Controller or >1 module: switch to `GATE flow <TASK_DIR> feature` + tier L, or escalate with user confirmation in 7 高风险处置.
 - Overrides `trellis-brainstorm`: in 1.1 do NOT write design.md / implement.md (1.6 does, new session); write prd.md once, after the clarification; read code only via research/code-map.md or a targeted `git grep`.
 - Phases hand over through files; one fresh session per stage; `GATE usage <TASK_DIR> --phase <name> --tokens <n>` records tokens.
 - 1.6 `[required · once]` Plan documents (M/L): code-grounded `design.md` / `implement.md`, `GATE lint-plan` passes

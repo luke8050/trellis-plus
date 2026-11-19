@@ -24,6 +24,7 @@ BASE=/path/to/a/trellis-initialized/project  bash test-harness/run-regression.sh
 | S | 任务流程记录：`task.json` 的 `meta.plus_flow`（S/M/L 步骤表、门禁通过/失败、off 与 warn 不计为通过、换档保留进度） |
 | T | AGENTS.md 编码规范（`apply --all` / `--coding-rules` / `--no-coding-rules`、幂等、revert、doctor、update 补默认） |
 | U | `trellis-plus status`（默认/`--all`/`--json`、进度条、建议级别、完成态、坏 JSON） |
+| V | bugfix 流程：`flow` 命令（清理旧 tier / `tier` 拒绝 bugfix）、`seed`（注入 `bugfix.md` 与原任务 prd/design、自动填关联任务、替换 TBD `prd.md`）、`anchors`、`bug-plan`（含 `待先红验证` 与规模/高风险前置检查）、`bug-verify`（范围锁 `confirm` 阻断至第 8 节确认 / `error` 仅认第 4 节 / `off`、回归测试与修复前实测证据、跨模块/超限与第 7 节升级确认、`--staged`）、并入 `test --run`（含失败阻断 mvn、`gates.test=off` 解耦、忽略旧 tier S）与 hook、OCR 背景与委托模式、agent 补丁/workflow/面包屑文案；每条规则均有反向对照（可单独 `ONLY=V`） |
 | M | 随包资产（reviewer agent、workflow 体积回归线、样例、无旧名称残留） |
 
 ## 约定

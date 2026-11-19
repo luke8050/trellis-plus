@@ -6,7 +6,7 @@ Runs after 2.2 passes. Every added/modified Service/Controller (`*Controller.jav
 node ./.trellis/plus/gate.mjs test --task {TASK_DIR} --run
 ```
 
-Load the `plus-test-gate` skill. On failure dispatch `trellis-implement` to write the missing tests per the 测试矩阵 of `implement.md` and `.trellis/spec/guides/plus-testing-guide.md` (Java 8 + JUnit5 + Mockito), then repeat 2.2 and 2.4. Exemptions only via `implement.md` → 测试豁免 with a reason, and tell the user.
+Load the `plus-test-gate` skill. On failure dispatch `trellis-implement` to write the missing tests per `implement.md` 测试矩阵 (or `bugfix.md` 回归测试) and `.trellis/spec/guides/plus-testing-guide.md`, then repeat 2.2 and 2.4. Feature exemptions: `implement.md` → 测试豁免. Bugfix: `bug-verify` also runs here; unlisted changed files block until the user confirms (`8 范围确认` or add to `4`).
 
 #### 2.5 OCR review `[required · repeatable]`
 

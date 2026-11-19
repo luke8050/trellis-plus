@@ -21,7 +21,10 @@
  *   ocr  [--task <t>] [--run] [--inspect] [--force --reason "<why>"]       run / verify alibaba open-code-review + severity-aware triage
  *   pre-commit [--task <t>] [--run] [--hook]   test + ocr (--hook = git pre-commit mode: staged files only)
  *   gates                  list every gate, its switch (profile / gates.* in plus.config.json) and what it checks (0 tokens)
- *   lightweight <task> --reason "<why>"   deprecated alias of `tier <task> S`
+ *   flow <task> [bugfix|feature] [--from <task>] show / set the flow: a bug fix of a committed feature is flow bugfix (no tier, no prd.md, no align; one bugfix.md)
+ *   bug-plan <task> bugfix flow: bugfix.md sections, real root-cause anchors, a clear fix plan, allowed files, regression tests (also run by pre-start)
+ *   bug-verify <task> [--base <ref>] [--staged] bugfix flow: scope (ask the user), regression test in the diff, risk signals (also run by test / pre-commit)
+ * lightweight <task> --reason "<why>" deprecated alias of `tier <task> S`
  *
  * Exit code: 0 = pass, 1 = gate failed, 2 = usage / environment error.
  * Bypass (deliberate, e.g. in a git hook): TRELLIS_PLUS_SKIP_GATE=1
@@ -49,6 +52,7 @@ const DEFAULT_CONFIG = {
     highRiskRefs: 5, // a symbol with >= this many references must be marked 高风险 in design.md section 7
   },
   review: { maxRounds: 2 },
+  bugfix: { scopeLock: "confirm", warnFiles: 5, warnLines: 200 }, // flow bugfix: a changed file outside bugfix.md 允许改动文件: "confirm" = blocks until user confirms in 8 范围确认 or adds to 4 (default) | "error" = strict allowlist (4 only) | "off"; the size hints only warn
   profile: "standard", // preset of the gate switches: "standard" (v2 default) | "strict" | "light"; `gates.<name>` overrides single gates
   gates: {}, // { align | lintPlan | designReview | manifests | test | ocr | hook : "error" | "warn" | "off" }
   hook: { runTests: false }, // git pre-commit hook: also run the unit tests (slow); default = static checks only
@@ -118,12 +122,13 @@ const GATES = {
   manifests: "task.py start: implement.jsonl / check.jsonl carry real spec entries besides the [plus] guides (step 1.3)",
   test: "every changed Service/Controller has a changed JUnit5 unit test (same Maven module); tier S/M limits",
   ocr: "ocr review (or delegation mode) report exists, is fresh, every finding triaged by severity",
+  bugfix: "flow bugfix: bug-plan (bugfix.md sections, anchors, fix plan, allowed files, regression tests) before start; bug-verify (scope, regression test in the diff, risk signals) at 2.4 / pre-commit",
   hook: "git pre-commit hook (tests + OCR triage on the staged files)",
 }
 const PROFILES = {
   strict: {},
   standard: { designReview: "warn", manifests: "off", hook: "warn" },
-  light: { lintPlan: "warn", designReview: "off", manifests: "off", ocr: "warn", hook: "warn" },
+  light: { lintPlan: "warn", designReview: "off", manifests: "off", ocr: "warn", bugfix: "warn", hook: "warn" },
 }
 const GATE_MODES = ["error", "warn", "off"]
 
@@ -133,6 +138,7 @@ function checkGates(cfg) {
     if (!GATES[k]) fail2(`plus.config.json: gates.${k} is unknown (gates: ${Object.keys(GATES).join(", ")})`)
     if (!GATE_MODES.includes(v)) fail2(`plus.config.json: gates.${k} = ${JSON.stringify(v)} is invalid (use ${GATE_MODES.join(" | ")})`)
   }
+  if (!SCOPE_MODES.includes(cfg.bugfix.scopeLock)) fail2(`plus.config.json: bugfix.scopeLock "${cfg.bugfix.scopeLock}" is invalid (use ${SCOPE_MODES.join(" | ")})`)
 }
 
 /** Effective mode of a gate and where it comes from. */
@@ -169,7 +175,7 @@ function cmdGates(cfg) {
     const g = gateInfo(cfg, k)
     console.log(`  ${k.padEnd(13)} ${g.mode.padEnd(5)} [${g.from}]  ${GATES[k]}`)
   }
-  console.log("  Always on, not switchable: the tier decision before seed/start (task.py start needs a tier), exit-code contract, TRELLIS_PLUS_SKIP_GATE.")
+  console.log("  Always on, not switchable: the tier decision before seed/start in feature flow (flow bugfix uses no tier), exit-code contract, TRELLIS_PLUS_SKIP_GATE.")
   console.log('  Change: plus.config.json  "profile": "strict|standard|light"  and/or  "gates": { "<name>": "error|warn|off" }')
   return 0
 }
@@ -559,6 +565,11 @@ function svcCtlChanges(files, cfg) {
 }
 
 function cmdTier(taskDir, value, opts, cfg) {
+  if (taskFlow(taskDir).bugfix) {
+    if (!value) { console.log("tier: (none — flow bugfix uses no S/M/L tier)"); return 0 }
+    console.error("trellis-plus gate: task is in flow bugfix (no S/M/L tier). To use tiers, switch first: `node .trellis/plus/gate.mjs flow <task> feature`")
+    return 1
+  }
   const ti = taskTier(taskDir)
   if (!value) {
     console.log(ti.unset ? `tier: (not set)` : `tier: ${ti.tier}${ti.legacy ? " (legacy task: no meta.plus_tier)" : ""}${ti.reason ? ` — ${ti.reason}` : ""}`)
@@ -628,7 +639,10 @@ function anchorsGate(taskDir, cfg) {
   const rep = new Report(`anchors  ${relative(ROOT, taskDir)}`)
   const seen = new Set()
   let n = 0
-  for (const [name, f] of [["design.md", "design.md"], ["implement.md", "implement.md"], ["research/code-map.md", "research/code-map.md"]]) {
+  const files = taskFlow(taskDir).bugfix
+    ? [["bugfix.md", "bugfix.md"]]
+    : [["design.md", "design.md"], ["implement.md", "implement.md"], ["research/code-map.md", "research/code-map.md"]]
+  for (const [name, f] of files) {
     const txt = read(join(taskDir, f))
     if (txt === null) { rep.note(`${name} not present — skipped`); continue }
     const clean = stripComments(txt)
@@ -668,6 +682,7 @@ function sectionItems(body) {
  */
 function alignGate(taskDir, cfg, ti = taskTier(taskDir)) {
   const rep = new Report(`align  ${relative(ROOT, taskDir)}`)
+  if (taskFlow(taskDir).bugfix) { rep.note("flow bugfix: this gate belongs to the feature flow — a bug fix is checked by `gate bug-plan` / `gate bug-verify`"); return rep }
   const soft = (m) => (ti.legacy ? rep.warn(`legacy task: ${m}`) : rep.error(m))
   const src = prdSource(taskDir)
   const raw = read(src.path)
@@ -756,6 +771,7 @@ const TYPE_RE = { 正常: /正常|normal/i, 边界: /边界|boundary/i, 异常: 
  */
 function lintPlan(taskDir, cfg, ti = taskTier(taskDir)) {
   const rep = new Report(`lint-plan  ${relative(ROOT, taskDir)}`)
+  if (taskFlow(taskDir).bugfix) { rep.note("flow bugfix: this gate belongs to the feature flow — a bug fix is checked by `gate bug-plan` / `gate bug-verify`"); return rep }
   const soft = (m) => (ti.legacy ? rep.warn(`legacy task: ${m}`) : rep.error(m))
   const L = cfg.limits
   const prdRaw = readPrd(taskDir)
@@ -967,6 +983,7 @@ const RESOLUTION_RE = /^\s*[-*]\s*#(\d+)\s+(采纳|驳回)\s*[—–:：-]+\s*(.
 
 function designReview(taskDir, cfg, ti = taskTier(taskDir)) {
   const rep = new Report(`design-review  ${relative(ROOT, taskDir)}`)
+  if (taskFlow(taskDir).bugfix) { rep.note("flow bugfix: this gate belongs to the feature flow — a bug fix is checked by `gate bug-plan` / `gate bug-verify`"); return rep }
   if (needTier(rep, ti)) return rep
   if (ti.tier !== "L") { rep.note(`tier ${ti.tier}: independent design review is not required (L only) — skip step 1.7, do not dispatch plus-design-reviewer`); return rep }
   const rdir = join(taskDir, "reviews")
@@ -1037,6 +1054,7 @@ function manifestsCheck(taskDir) {
 }
 
 function preStart(taskDir, cfg) {
+  if (taskFlow(taskDir).bugfix) return [runGate("bugfix", cfg, "bug-plan", () => bugfixPlan(taskDir, cfg)), runGate("manifests", cfg, "manifests", () => manifestsCheck(taskDir))]
   const ti = taskTier(taskDir)
   const tr = new Report(`tier  ${relative(ROOT, taskDir)}`)
   if (needTier(tr, ti)) return [tr]
@@ -1052,6 +1070,7 @@ function preStart(taskDir, cfg) {
 const PRD_SKELETON_RE = /##\s+Requirements\s+-\s+TBD/
 
 function cmdSeed(taskDir, cfg, opts = {}) {
+  if (taskFlow(taskDir).bugfix) return seedBugfix(taskDir)
   const ti = taskTier(taskDir)
   const rep = new Report("seed")
   if (ti.unset) { rep.error("set the tier first (a human decides): node .trellis/plus/gate.mjs tier <task> S|M|L [--reason \"…\"]"); rep.print(); return 1 }
@@ -1108,6 +1127,379 @@ function cmdSeed(taskDir, cfg, opts = {}) {
   return 0
 }
 
+// ───────────────────────── bugfix flow ─────────────────────────
+// A defect fix is a task of its own kind (task.json meta.plus_flow = "bugfix"), orthogonal to the S/M/L tier: no prd.md, no align, no design.md /
+// implement.md / code-map / design review. ONE document, bugfix.md (symptom, root cause with real anchors, the fix plan, the files the fix may
+// touch, the regression tests), is checked by `bug-plan` before `task.py start` and by `bug-verify` (scope, regression test in the diff, risk
+// signals) in step 2.4 and in the pre-commit hook. test / ocr / hook stay as they are.
+
+const BUGFIX_SECTIONS = [["现象与复现", "1 现象与复现"], ["根因", "2 根因"], ["修复方案", "3 修复方案"], ["允许改动文件", "4 允许改动文件"], ["回归测试", "5 回归测试"], ["影响面", "6 影响面"], ["高风险处置", "7 高风险处置"]]
+const SCOPE_MODES = ["confirm", "error", "off"]
+const REG_RE = /^([A-Za-z0-9_$.]+)#([A-Za-z0-9_$]+)/
+const BEFORE_PENDING_RE = /^(?:待先红验证|待验证|pending)$/i
+const USER_CONFIRM_RE = /用户确认|user confirmed|confirmed by/i
+const RISKY_RE = /@Transactional|\bsynchronized\b|\bReentrantLock\b|\b[Ll]ock\(|@Async|@Version\b|@Cacheable|@CacheEvict|@PreAuthorize/g
+const isTestPath = (f) => /(^|\/)src\/test\//.test(f)
+const isBuildFile = (f) => /(^|\/)(pom\.xml|build\.gradle(?:\.kts)?)$/.test(f)
+const isSqlOrMigration = (f) => /\.sql$/i.test(f) || /(^|\/)(db\/migration|migrations?|flyway|liquibase)\//i.test(f)
+const isCodePath = (f) => /\.(java|kt|groovy)$/.test(f)
+
+/** High-risk handling in bugfix.md 7 高风险处置: non-empty substantive text (>= 10 chars, not 无/none), optionally with user confirmation. */
+function highRiskState(secs) {
+  const hr = (findSection(secs, "高风险处置")?.body ?? "").replace(/\s+/g, " ").trim()
+  const ok = hr.replace(/\s+/g, "").length >= 10 && !/^(无|none)(?:[:：。.]|$)/i.test(hr)
+  return { ok, confirmed: ok && USER_CONFIRM_RE.test(hr) }
+}
+
+/** Check scale & high-risk signals (pom/SQL, >maxClassesM Service/Controller, or >1 Maven module) for both bug-plan and bug-verify. */
+function checkBugfixScaleAndRisk(files, secs, cfg, rep, phase) {
+  const tg = cfg.testGate
+  const sc = files.filter((f) => {
+    if (!matchAny(tg.include, f) || matchAny(tg.exclude, f)) return false
+    const abs = resolve(ROOT, f)
+    if (existsSync(abs) && tg.skipInterfaces && isPureInterface(read(abs) ?? "")) return false
+    return true
+  })
+  const nonTestCode = files.filter((f) => isCodePath(f) && !isTestPath(f))
+  const mods = new Set((nonTestCode.length ? nonTestCode : sc).map(moduleOf))
+  const limit = cfg.tiers.maxClassesM
+  const hr = highRiskState(secs)
+  if (mods.size > 1 || sc.length > limit) {
+    if (hr.confirmed) rep.note(`${phase}: high-risk bugfix escalated (${sc.length} Service/Controller file(s) in ${mods.size} module(s)) — confirmed in bugfix.md 7 高风险处置`)
+    else rep.error(`not a minimal fix: ${sc.length} Service/Controller file(s) in ${mods.size} module(s) (a bug fix: at most ${limit}, one module). Split the task, or treat it as a feature: \`gate flow <task> feature\` then \`gate tier <task> L\`; if this is truly one complex defect, ask the user and record rollback/impact + \`用户确认：<姓名/日期>\` in bugfix.md 7 高风险处置`)
+  }
+  const sig = []
+  if (files.some(isBuildFile)) sig.push("build file (pom.xml / build.gradle)")
+  if (files.some(isSqlOrMigration)) sig.push("database script / migration")
+  if (sig.length && !hr.ok) {
+    rep.error(`high-risk change (${sig.join("; ")}) but bugfix.md 7 高风险处置 is empty or 无 — write the rollback and compatibility handling, and tell the user`)
+  }
+}
+
+/** Flow of a task: "bugfix" (meta.plus_flow) or "feature" (default, the S/M/L flow). */
+function taskFlow(taskDir) {
+  const m = readTaskJson(taskDir)?.data?.meta
+  const bugfix = m?.plus_flow === "bugfix"
+  const src = bugfix && typeof m.plus_bug_source === "string" ? m.plus_bug_source.trim() : ""
+  return { bugfix, flow: bugfix ? "bugfix" : "feature", source: src || null }
+}
+
+/** gate flow <task> [bugfix|feature] [--from <source task>] — show / set the flow (stored in task.json meta, next to plus_tier). */
+function cmdFlow(taskDir, value, opts) {
+  const cur = taskFlow(taskDir)
+  if (!value) { console.log(`flow: ${cur.flow}${cur.source ? ` (from ${cur.source})` : ""}`); return 0 }
+  const v = String(value).toLowerCase()
+  if (v !== "bugfix" && v !== "feature") fail2("flow must be bugfix or feature")
+  const tj = readTaskJson(taskDir)
+  if (!tj) fail2(`task.json not found / not valid JSON in ${relative(ROOT, taskDir)}`)
+  const meta = tj.data.meta && typeof tj.data.meta === "object" ? tj.data.meta : {}
+  let src = null
+  if (v === "bugfix") {
+    if (opts.from === true) fail2("--from needs the task the defect came from (e.g. --from 10-09-order-feature)")
+    if (opts.from !== undefined) {
+      const sd = taskDirByName(opts.from)
+      if (!sd) fail2(`--from: task not found: ${opts.from}`)
+      if (resolve(sd) === resolve(taskDir)) fail2("--from cannot be the task itself")
+      src = basename(sd)
+    }
+    meta.plus_flow = "bugfix"
+    delete meta.plus_tier
+    delete meta.plus_tier_reason
+    if (src) meta.plus_bug_source = src; else delete meta.plus_bug_source
+  } else { delete meta.plus_flow; delete meta.plus_bug_source }
+  tj.data.meta = meta
+  writeFileSync(tj.path, JSON.stringify(tj.data, null, 2) + (tj.raw.endsWith("\n") ? "\n" : ""))
+  console.log(v === "bugfix"
+    ? `flow bugfix set for ${relative(ROOT, taskDir)}${src ? ` (from ${src})` : ""}\n  No tier, no prd.md, no align. Next: \`gate seed <task>\` creates bugfix.md (skill plus-bugfix) → fill it → \`gate bug-plan\` → \`task.py start\`.`
+    : `flow feature set for ${relative(ROOT, taskDir)} — the S/M/L tier flow applies again (\`gate tier <task> S|M|L\`).`)
+  return 0
+}
+
+/** Test files (src/test) of a test class name, looked up in the repo. */
+const testFilesOf = (cls) => resolveFile(`${cls}.java`).filter(isTestPath)
+
+/** bugfix.md 4 允许改动文件: [{ written, cands, isNew }] */
+function bugfixAllowed(secs) {
+  const sec = findSection(secs, "允许改动文件")
+  return (sec ? parseTable(sec.body) : []).map((r) => {
+    const written = col(r, ["文件", "file"]).replace(/\\/g, "/").replace(/^\.\//, "").trim()
+    return { written, cands: written ? resolveFile(written) : [], isNew: /新增|新建|\bnew\b/i.test(Object.values(r).join(" ")) }
+  }).filter((a) => a.written)
+}
+
+/** bugfix.md 5 回归测试: [{ raw, cls, method, before }] */
+function bugfixRegression(secs) {
+  const sec = findSection(secs, "回归测试")
+  return (sec ? parseTable(sec.body) : []).map((r) => {
+    const raw = col(r, ["测试类", "测试"]).trim()
+    const m = raw.match(REG_RE)
+    return { raw, cls: m ? m[1].split(".").pop() : null, method: m ? m[2] : null, before: col(r, ["修复前"]) }
+  })
+}
+
+/** bugfix.md 8 范围确认: lines `- <path> — <reason>（用户确认：<who/when>）` — the record that the user approved a change outside the file list. */
+function confirmedScope(secs) {
+  const s = findSection(secs, "范围确认")
+  const out = []
+  for (const line of (s ? s.body : "").split("\n")) {
+    const m = line.match(/^\s*[-*]\s*`?([^\s`]+?)`?\s+[—–-]\s+(.+)$/)
+    if (m && USER_CONFIRM_RE.test(m[2])) out.push({ path: m[1].replace(/\\/g, "/").replace(/^\.\//, ""), text: m[2].trim() })
+  }
+  return out
+}
+
+/** Added / removed lines of one file (working tree vs base, or the index when staged); an untracked new file counts as all added. */
+function fileDiff(file, base, staged) {
+  const d = git(["diff", "-U0", "--relative", ...(staged ? ["--cached"] : [base]), "--", file])
+  const added = [], removed = []
+  for (const l of (d.ok ? d.out : "").split("\n")) {
+    if (/^(\+\+\+|---) (?:[ab]\/|\/dev\/null)/.test(l)) continue
+    if (l.startsWith("+")) added.push(l.slice(1)); else if (l.startsWith("-")) removed.push(l.slice(1))
+  }
+  if (!staged && added.length === 0 && removed.length === 0) {
+    const u = git(["ls-files", "--others", "--exclude-standard", "--", file])
+    if (u.ok && u.out.split("\n").includes(file)) added.push(...(read(resolve(ROOT, file)) ?? "").split("\n"))
+  }
+  return { added: added.join("\n"), removed: removed.join("\n"), n: added.length + removed.length }
+}
+
+/** bug-plan: bugfix.md is complete and true BEFORE the fix starts (sections, real anchors, a clear fix plan, existing files, regression tests, scale/risk pre-check). */
+function bugfixPlan(taskDir, cfg) {
+  const rep = new Report(`bug-plan ${relative(ROOT, taskDir)}`)
+  const fl = taskFlow(taskDir)
+  if (!fl.bugfix) { rep.error("task is not a bugfix-flow task — run `node .trellis/plus/gate.mjs flow <task> bugfix --from <source task>` first"); return rep }
+  const raw = read(join(taskDir, "bugfix.md"))
+  if (raw === null) { rep.error("bugfix.md missing — run `gate seed <task>`, then fill it (skill plus-bugfix)"); return rep }
+  const txt = stripComments(raw)
+  placeholders("bugfix.md", txt, rep)
+  const secs = sectionsOf(txt)
+  for (const [key, label] of BUGFIX_SECTIONS) {
+    const s = findSection(secs, key)
+    if (!s) rep.error(`bugfix.md missing section "## ${label}"`)
+    else if (s.body.replace(/\s+/g, "").length === 0) rep.error(`bugfix.md section "${s.heading}" is empty${key === "影响面" || key === "高风险处置" ? " (write 无：<原因>)" : ""}`)
+  }
+  const nonEmpty = (key) => { const s = findSection(secs, key); return s && s.body.replace(/\s+/g, "").length > 0 ? s : null }
+  const sym = nonEmpty("现象与复现")
+  if (sym) {
+    const rows = parseTable(sym.body)
+    if (rows.length === 0) rep.error("bugfix.md 现象与复现: needs a table row (前置条件/输入 | 期望 | 实际)")
+    for (const r of rows) if (Object.values(r).some((v) => !String(v).trim())) rep.error("bugfix.md 现象与复现: every row needs 前置条件/输入, 期望 and 实际")
+  }
+  const rc = nonEmpty("根因")
+  if (rc) {
+    const seen = new Set()
+    if (verifyAnchors(rc.body, "bugfix.md 根因", rep, cfg.planning, seen) === 0) rep.error("bugfix.md 根因: cite the root cause as a code anchor `文件:行#符号` (e.g. `OrderService.java:42#create`) — a description alone is not enough")
+  }
+  const fp = nonEmpty("修复方案")
+  if (fp) {
+    verifyAnchors(fp.body, "bugfix.md 修复方案", rep, cfg.planning, new Set())
+    if (fp.body.replace(/\s+/g, "").length < 40) rep.error("bugfix.md 修复方案 is too short (< 40 chars): say which class / method changes, to what logic, why that removes the root cause, and what stays unchanged")
+  }
+  const al = bugfixAllowed(secs)
+  if (nonEmpty("允许改动文件")) {
+    if (al.length === 0) rep.error("bugfix.md 允许改动文件: needs a table (文件 | 改什么), one row per file the fix changes — the scope check reads it")
+    for (const a of al) {
+      if (a.cands.length === 0 && !a.isNew) rep.error(`bugfix.md 允许改动文件: \`${a.written}\` does not exist — fix the path, or write 新增 in its row if the file is new`)
+      if (a.cands.length > 1) rep.warn(`bugfix.md 允许改动文件: \`${a.written}\` matches ${a.cands.length} files (${a.cands.slice(0, 3).join(", ")}) — write a longer path to make it exact`)
+    }
+    const plannedFiles = al.map((a) => a.cands[0] ?? a.written)
+    checkBugfixScaleAndRisk(plannedFiles, secs, cfg, rep, "bug-plan")
+  }
+  const rg = bugfixRegression(secs)
+  if (nonEmpty("回归测试")) {
+    if (rg.length === 0) rep.error("bugfix.md 回归测试: needs a table row per test (测试类#方法 | 修复前（失败命令与摘要）) — a bug fix adds or changes a unit test")
+    for (const g of rg) {
+      if (!g.cls) { rep.error(`bugfix.md 回归测试: "${g.raw.slice(0, 40)}" is not written as 测试类#方法`); continue }
+      const listed = al.some((a) => basename(a.written, ".java") === g.cls)
+      if (testFilesOf(g.cls).length === 0 && !listed) rep.error(`bugfix.md 回归测试: test class ${g.cls} not found under src/test — list it as 新增 in 允许改动文件, or fix the name`)
+      const b = g.before.trim()
+      if (!BEFORE_PENDING_RE.test(b) && b.replace(/\s+/g, "").length < 6) rep.error(`bugfix.md 回归测试: ${g.cls}#${g.method} needs either "待先红验证" (fill the real failing command + line in Phase 2) or the before-fix result (>= 6 chars)`)
+    }
+  }
+  const im = nonEmpty("影响面")
+  if (im) for (const r of parseTable(im.body)) {
+    const name = col(r, ["符号"]) || "?"
+    if (!col(r, ["处置"]).trim()) { rep.error(`bugfix.md 影响面: "${name}" has no 处置`); continue }
+    const n = hitCount(col(r, ["引用"]))
+    if (n !== null && n >= cfg.planning.highRiskRefs && !/高风险|high[- ]?risk/i.test(Object.values(r).join(" "))) rep.error(`bugfix.md 影响面: "${name}" has ${n} references (>= ${cfg.planning.highRiskRefs}) — mark it 高风险 and say how the callers stay compatible`)
+  }
+  if (fl.source && !taskDirByName(fl.source)) rep.warn(`source task ${fl.source} (meta.plus_bug_source) is not under .trellis/tasks`)
+  rep.note(`flow bugfix${fl.source ? ` (from ${fl.source})` : ""}; ${al.length} allowed file(s), ${rg.length} regression test(s)`)
+  return rep
+}
+
+/**
+ * bug-verify: the diff against bugfix.md. Returns the report and the regression test classes per Maven module (so `test --run` runs them even
+ * when the fix is not in a Service/Controller). opts: { base, staged } like the test gate.
+ *  - scope: bugfix.scopeLock "confirm" (default) blocks unconfirmed files outside 允许改动文件 until the user confirms in 8 范围确认 or adds to 4; "error" is strict (section 4 only); "off" skips
+ *  - every regression test of bugfix.md is in the diff, its method was added/changed, and its 修复前 column has real before-fix evidence (not 待先红验证)
+ *  - scale & high-risk: > maxClassesM Service/Controller or > 1 Maven module requires splitting / feature+L OR confirmed 7 高风险处置; pom / SQL changes need 7 高风险处置
+ */
+function bugfixVerify(taskDir, cfg, opts = {}) {
+  const rep = new Report(`bug-verify ${relative(ROOT, taskDir)} (scope, regression tests, risk signals)`)
+  const groups = new Map()
+  if (!taskFlow(taskDir).bugfix) { rep.error("task is not a bugfix-flow task — `node .trellis/plus/gate.mjs flow <task> bugfix`"); return { rep, groups } }
+  const raw = read(join(taskDir, "bugfix.md"))
+  if (raw === null) { rep.error("bugfix.md missing — run `gate seed <task>`, then fill it (skill plus-bugfix)"); return { rep, groups } }
+  const secs = sectionsOf(stripComments(raw))
+  const staged = !!opts.staged
+  const base = typeof opts.base === "string" && opts.base ? opts.base : "HEAD"
+  const changed = changedFiles(base, staged).filter((f) => !/^\.(trellis|opencode)\//.test(f) && !/(^|\/)target\//.test(f))
+  const changedSet = new Set(changed)
+  const mode = cfg.bugfix.scopeLock
+  rep.note(staged ? `staged: ${changed.length} file(s)` : `base=${base}, ${changed.length} changed file(s)`)
+
+  // 1 scope: the files the fix changes are the files bugfix.md announces (tests are free); anything else blocks until the user confirms
+  const al = bugfixAllowed(secs)
+  const acks = confirmedScope(secs)
+  const listed = (f) => al.some((a) => a.cands.includes(f) || f === a.written || f.endsWith("/" + a.written))
+  const acked = (f) => acks.some((c) => f === c.path || f.endsWith("/" + c.path))
+  const outside = changed.filter((f) => !isTestPath(f) && !listed(f))
+  if (mode !== "off") {
+    if (mode === "error") {
+      if (outside.length) rep.error(`scope: ${outside.length} changed file(s) are not in bugfix.md 4 允许改动文件 (strict scopeLock=error): ${outside.slice(0, 5).join(", ")}${outside.length > 5 ? ", …" : ""}\n      Add the file to bugfix.md 4 允许改动文件 (after user approval) or revert it.`)
+    } else {
+      for (const f of outside.filter(acked)) rep.note(`scope: ${f} is outside 允许改动文件 — confirmed by the user (bugfix.md 8 范围确认)`)
+      const open = outside.filter((f) => !acked(f))
+      if (open.length) rep.error(`scope: ${open.length} changed file(s) are not in bugfix.md 4 允许改动文件: ${open.slice(0, 5).join(", ")}${open.length > 5 ? ", …" : ""}\n      STOP and ask the user whether they belong to this fix. Yes → list the file in 4 (it is part of the fix) or record it in 8 范围确认 as "- <path> — <原因>（用户确认：<姓名/日期>）"; no → revert it.`)
+    }
+  }
+
+  // 2 the regression tests: a bug fix always adds or changes a unit test, its method is in this diff, and before-fix failure was recorded
+  const tg = cfg.testGate
+  const annRe = new RegExp(tg.testAnnotationPattern)
+  const rg = bugfixRegression(secs)
+  if (rg.length === 0) rep.error("bugfix.md 回归测试 lists no test — a bug fix adds or changes a unit test (测试类#方法)")
+  for (const g of rg) {
+    if (!g.cls) { rep.error(`bugfix.md 回归测试: "${g.raw.slice(0, 40)}" is not written as 测试类#方法`); continue }
+    const b = g.before.trim()
+    if (BEFORE_PENDING_RE.test(b) || b.replace(/\s+/g, "").length < 6) rep.error(`regression test ${g.cls}#${g.method}: bugfix.md 5 回归测试 still lacks the before-fix failure evidence (run the test before the fix and record "命令 → 失败行", >= 6 chars)`)
+    const cands = testFilesOf(g.cls)
+    if (cands.length === 0) { rep.error(`regression test class ${g.cls} not found under src/test`); continue }
+    const t = cands.find((c) => changedSet.has(c))
+    if (!t) { rep.error(`regression test ${g.cls}#${g.method}: ${cands[0]} was not added/modified in this change — a bug fix needs a new or changed unit test`); continue }
+    if (!new RegExp(`\\b${g.method.replace(/\$/g, "\\$")}\\b`).test(fileDiff(t, base, staged).added) && !changedMethodNames(t, base, staged).has(g.method)) { rep.error(`regression test ${g.cls}#${g.method}: the method is not in the diff of ${t} — add or change it in this fix`); continue }
+    if (tg.requireTestAnnotation && !annRe.test(read(resolve(ROOT, t)) ?? "")) { rep.error(`${t} contains no JUnit test method (${tg.testAnnotationPattern})`); continue }
+    rep.note(`ok  ${g.cls}#${g.method}  ←  ${t}`)
+    const mod = moduleOf(t)
+    if (!groups.has(mod)) groups.set(mod, new Set())
+    groups.get(mod).add(g.cls)
+  }
+
+  // 3 size and risk of the change (objective signals from the diff, not from what the document says)
+  checkBugfixScaleAndRisk(changed, secs, cfg, rep, "bug-verify")
+  let lines = 0
+  const sensitive = new Set()
+  for (const f of changed) {
+    const d = fileDiff(f, base, staged)
+    lines += d.n
+    if (isCodePath(f) && !isTestPath(f)) for (const m of `${d.added}\n${d.removed}`.matchAll(RISKY_RE)) sensitive.add(`${m[0].replace(/\($/, "")} (${basename(f)})`)
+  }
+  if (sensitive.size) rep.warn(`risk signal: the diff touches transaction / concurrency / cache / security code: ${[...sensitive].slice(0, 5).join(", ")}${sensitive.size > 5 ? ", …" : ""} — confirm with the user that boundaries and error handling are unchanged`)
+  const srcFiles = changed.filter((f) => !isTestPath(f)).length
+  if (srcFiles > cfg.bugfix.warnFiles || lines > cfg.bugfix.warnLines) rep.warn(`the change is larger than a minimal fix (${srcFiles} non-test file(s), ${lines} changed line(s); hint: ${cfg.bugfix.warnFiles} files / ${cfg.bugfix.warnLines} lines) — ask the user whether it is still one fix`)
+  return { rep, groups }
+}
+
+/** test / pre-commit of a bugfix task: add the bug-verify report, merge its regression test classes into the Maven run, and return whether it passed. */
+function bugfixAddReports(taskDir, cfg, opts, reps, groups) {
+  if (!taskDir || !taskFlow(taskDir).bugfix || gateMode(cfg, "bugfix") === "off") return true
+  const r = bugfixVerify(taskDir, cfg, opts)
+  const applied = applyMode(r.rep, cfg, "bugfix")
+  reps.push(applied)
+  for (const [m, s] of r.groups) {
+    if (!groups.has(m)) groups.set(m, new Set())
+    for (const c of s) groups.get(m).add(c)
+  }
+  return applied.ok
+}
+
+/** seed of a bugfix task: bugfix.md only; sub-agents receive bugfix.md, the unit-test guide, and the original task's prd.md / design.md. */
+function seedBugfix(taskDir) {
+  const rep = new Report("seed (bugfix flow)")
+  const fl = taskFlow(taskDir)
+  const dst = join(taskDir, "bugfix.md")
+  if (existsSync(dst)) rep.note("bugfix.md exists — kept")
+  else {
+    let tpl = readFileSync(join(PLUS_DIR, "templates", "bugfix.md"), "utf8")
+    if (fl.source) tpl = tpl.replace(/^关联任务：.*$/m, `关联任务：${fl.source}`)
+    writeFileSync(dst, tpl)
+    rep.note(`created ${relative(ROOT, dst)}`)
+  }
+  // Replace an untouched Trellis prd.md skeleton ("Requirements - TBD") so inject-subagent-context does not inject a TBD stub.
+  const prdPath = join(taskDir, "prd.md")
+  const curPrd = read(prdPath)
+  if (curPrd !== null && PRD_SKELETON_RE.test(curPrd) && !/^对齐状态[:：]/m.test(curPrd) && curPrd.length < 800) {
+    writeFileSync(prdPath, `# Bugfix 任务：无独立 PRD\n\n本任务为缺陷修复流程（flow bugfix），不写独立 PRD。请以同目录的 \`bugfix.md\` 为准${fl.source ? `；原需求边界见关联任务 \`${fl.source}\` 的 prd.md / design.md` : ""}。\n`)
+    rep.note("replaced the untouched Trellis prd.md skeleton with a pointer to bugfix.md")
+  }
+  const add = [
+    [relative(ROOT, dst).replace(/\\/g, "/"), "[plus] bugfix.md: root cause, minimal fix plan, allowed files and regression tests"],
+    [".trellis/spec/guides/plus-testing-guide.md", "[plus] unit-test rules for Java 8 + JUnit5 + Mockito"],
+  ]
+  const srcDir = fl.source ? taskDirByName(fl.source) : null
+  if (srcDir) for (const f of ["prd.md", "design.md"]) if (existsSync(join(srcDir, f))) add.push([relative(ROOT, join(srcDir, f)).replace(/\\/g, "/"), `[plus] ${f} of the task this defect came from (${fl.source}): the original requirement boundary`])
+  for (const kind of ["implement", "check"]) {
+    const p = join(taskDir, `${kind}.jsonl`)
+    if (!existsSync(p)) continue
+    for (const [file, reason] of add) {
+      if (readJsonl(p).some((e) => e.file === file)) continue
+      appendFileSync(p, (read(p)?.endsWith("\n") || !read(p) ? "" : "\n") + JSON.stringify({ file, reason }) + "\n")
+      rep.note(`${kind}.jsonl += ${file}`)
+    }
+  }
+  rep.note("Next: fill bugfix.md (skill plus-bugfix; write 待先红验证 in section 5 before start) → `gate bug-plan` → `task.py start` → write failing test, record failure in section 5, fix → `gate test --run` → `gate ocr --run`")
+  rep.print()
+  return 0
+}
+
+function statusBugfix(taskDir, cfg) {
+  const fl = taskFlow(taskDir)
+  console.log(`== status  ${relative(ROOT, taskDir)} ==`)
+  console.log(`  flow: bugfix${fl.source ? ` (from ${fl.source})` : ""} — no tier, no prd.md, no align`)
+  const t = read(join(taskDir, "bugfix.md"))
+  console.log(`  ${t === null ? "–" : "✓"} bugfix.md${t === null ? " (absent)" : ` ${bytesOf(t)} bytes`}`)
+  for (const f of ["reviews/ocr-triage.md", "usage.md"]) console.log(`  ${existsSync(join(taskDir, f)) ? "✓" : "–"} ${f}`)
+  if (t === null) { console.log("  next: `gate seed <task>`, then fill bugfix.md (skill plus-bugfix)"); return 0 }
+  const r = runGate("bugfix", cfg, "bug-plan", () => bugfixPlan(taskDir, cfg))
+  console.log(`  ${r.ok ? "✓" : "✗"} bug-plan${r.ok ? "" : ` — ${r.errors.length} problem(s), first: ${r.errors[0].slice(0, 110)}`}${r.ok && r.warnings.length ? ` (${r.warnings.length} warning(s))` : ""}`)
+  console.log(`  next: ${r.ok ? "bug-plan passes — step 1.3 manifests, then `task.py start`; after the fix and its unit test: `gate test --run` (also checks scope and the regression test), `gate ocr --run`" : "fix what `gate bug-plan` lists"}`)
+  return 0
+}
+
+/** Short background for ocr (--background-file) of a bugfix task: root cause, fix plan, files, regression tests, and what to look for. */
+function buildBugfixBackground(taskDir, cfg) {
+  const max = cfg.ocr.backgroundMaxChars
+  let tj = {}
+  try { tj = JSON.parse(read(join(taskDir, "task.json")) ?? "{}") } catch { /* ignore */ }
+  const secs = sectionsOf(stripComments(read(join(taskDir, "bugfix.md")) ?? ""))
+  const body = (k, n) => (findSection(secs, k)?.body ?? "").replace(/\s+/g, " ").trim().slice(0, n)
+  const files = bugfixAllowed(secs).map((a) => a.written).slice(0, 10)
+  const tests = bugfixRegression(secs).filter((g) => g.cls).map((g) => `${g.cls}#${g.method}`).slice(0, 6)
+  const tail = [
+    "## Review instructions",
+    "1. Does the change remove the stated root cause, not only the symptom? Do similar code paths or other callers have the same defect?",
+    "2. Point out every change that is NOT in the fix plan (files or logic).",
+    "3. Check that transaction boundaries, concurrency / idempotency, exception handling and error codes are unchanged, and null / boundary input is covered.",
+    "4. Would a regression test fail without the fix and pass with it?",
+  ].join("\n") + "\n"
+  let head = [
+    "# Review background (generated by trellis-plus) — BUG FIX",
+    "",
+    `Task: ${String(tj.title ?? basename(taskDir)).replace(/\s+/g, " ").slice(0, 120)}`,
+    "",
+    "## Root cause (bugfix.md)", body("根因", 300), "",
+    "## Fix plan", body("修复方案", 400), "",
+    ...(files.length ? ["## Files the fix may change", ...files.map((f) => `- ${f}`), ""] : []),
+    ...(tests.length ? ["## Regression tests", ...tests.map((t) => `- ${t}`), ""] : []),
+  ].join("\n") + "\n"
+  if (head.length + tail.length > max) head = head.slice(0, Math.max(0, max - tail.length - 15)) + "\n(truncated)\n"
+  const p = join(taskDir, "reviews", "ocr-background.md")
+  mkdirSync(dirname(p), { recursive: true })
+  writeFileSync(p, head + tail)
+  return p
+}
+
 // ───────────────────────── usage / status ─────────────────────────
 
 function cmdUsage(taskDir, opts, cfg) {
@@ -1132,6 +1524,7 @@ function cmdUsage(taskDir, opts, cfg) {
 }
 
 function cmdStatus(taskDir, cfg) {
+  if (taskFlow(taskDir).bugfix) return statusBugfix(taskDir, cfg)
   const rel = relative(ROOT, taskDir)
   const ti = taskTier(taskDir)
   console.log(`== status  ${rel} ==`)
@@ -1240,7 +1633,7 @@ function testGate(taskDir, cfg, opts = {}) {
   rep.note(staged ? `staged: ${changed.length} file(s)` : `base=${base}, ${changed.length} changed file(s)`)
   const groups = new Map() // module -> Set(test class)
   const targets = changed.filter((f) => matchAny(tg.include, f) && !matchAny(tg.exclude, f) && existsSync(resolve(ROOT, f)))
-  const ti = taskDir ? taskTier(taskDir) : null
+  const ti = taskDir && !taskFlow(taskDir).bugfix ? taskTier(taskDir) : null
   if (targets.length === 0) {
     rep.note("no changed Service/Controller sources matched testGate.include" + (!staged && base === "HEAD" ? " (already committed? pass --base <branch>)" : ""))
     return { rep, groups }
@@ -1420,6 +1813,7 @@ function latestOcr(rdir) {
 
 /** Short task summary handed to ocr (--background-file): requirements, decisions, planned files. Never the whole plan. */
 function buildBackground(taskDir, cfg) {
+  if (taskFlow(taskDir).bugfix) return buildBugfixBackground(taskDir, cfg)
   const max = cfg.ocr.backgroundMaxChars
   let tj = {}
   try { tj = JSON.parse(read(join(taskDir, "task.json")) ?? "{}") } catch { /* ignore */ }
@@ -1508,7 +1902,8 @@ function ocrGate(taskDir, cfg, opts = {}) {
       const out = join(rdir, `ocr-r${n}.json`)
       const bgp = oc.background ? relative(ROOT, buildBackground(taskDir, cfg)) : null
       rep.warn(`OCR is not usable (${why}) → DELEGATION MODE: you review the code yourself`)
-      rep.note(`1. Review the changed source files (\`git diff HEAD\` + untracked files) against prd.md${bgp ? ` and ${bgp}` : ""}: bugs, security, transaction/concurrency/idempotency, unplanned changes.`)
+      const docRef = taskFlow(taskDir).bugfix ? "bugfix.md" : "prd.md"
+      rep.note(`1. Review the changed source files (\`git diff HEAD\` + untracked files) against ${docRef}${bgp ? ` and ${bgp}` : ""}: bugs, security, transaction/concurrency/idempotency, unplanned changes.`)
       rep.note(`2. Write ${relative(ROOT, out)} as: {"status":"complete","comments":[{"path":"<file>","start_line":<n>,"end_line":<n>,"severity":"critical|high|medium|low","category":"bug|security|maintainability","content":"<what is wrong and the fix>"}]}`)
       rep.note(`3. Triage every comment into ${relative(ROOT, taskDir)}/reviews/ocr-triage.md as usual, then verify: node .trellis/plus/gate.mjs ocr --task ${relative(ROOT, taskDir)}`)
       return rep
@@ -1629,6 +2024,13 @@ function main() {
     case "tier": return process.exit(cmdTier(resolveTask(taskArg), pos[2], opts, cfg))
     case "lightweight": console.log("note: `lightweight` is deprecated — use `gate tier <task> S --reason \"…\"`"); return process.exit(cmdTier(resolveTask(taskArg), "S", opts, cfg))
     case "seed": return process.exit(cmdSeed(resolveTask(taskArg), cfg, opts))
+    case "flow": return process.exit(cmdFlow(resolveTask(taskArg), pos[2], opts))
+    case "bug-plan": reps.push(runGate("bugfix", cfg, "bug-plan", () => bugfixPlan(resolveTask(taskArg), cfg))); break
+    case "bug-verify": {
+      if (gateMode(cfg, "bugfix") === "off") { reps.push(skippedReport("bug-verify", "bugfix")); break }
+      reps.push(applyMode(bugfixVerify(resolveTask(taskArg), cfg, { base: opts.base, staged: !!opts.staged }).rep, cfg, "bugfix"))
+      break
+    }
     case "status": return process.exit(cmdStatus(resolveTask(taskArg), cfg))
     case "usage": return process.exit(cmdUsage(resolveTask(taskArg), opts, cfg))
     case "matrix": return process.exit(cmdMatrix(resolveTask(taskArg), opts))
@@ -1642,10 +2044,17 @@ function main() {
     case "test": {
       const t = taskFromOpts(opts)
       if (opts.run) flowTask = t // only the formal run (step 2.4) counts for the flow record
-      if (gateMode(cfg, "test") === "off") { reps.push(skippedReport("test-gate", "test")); break }
-      const { rep, groups } = testGate(t, cfg, { base: opts.base, staged: !!opts.staged })
-      reps.push(applyMode(rep, cfg, "test"))
-      if (opts.run && rep.ok) reps.push(runTests(groups, cfg))
+      const groups = new Map()
+      let ok = true
+      if (gateMode(cfg, "test") === "off") reps.push(skippedReport("test-gate", "test"))
+      else {
+        const r = testGate(t, cfg, { base: opts.base, staged: !!opts.staged })
+        reps.push(applyMode(r.rep, cfg, "test"))
+        if (!r.rep.ok) ok = false
+        for (const [m, s] of r.groups) groups.set(m, new Set(s))
+      }
+      if (!bugfixAddReports(t, cfg, { base: opts.base, staged: !!opts.staged }, reps, groups)) ok = false
+      if (opts.run && ok) reps.push(runTests(groups, cfg))
       break
     }
     case "ocr": flowTask = taskFromOpts(opts); reps.push(runGate("ocr", cfg, "ocr-gate", () => ocrGate(flowTask, cfg, opts))); break
@@ -1662,12 +2071,17 @@ function main() {
         }
       }
       const t = taskFromOpts(opts)
+      const groups = new Map()
+      let ok = true
       if (gateMode(cfg, "test") === "off") reps.push(skippedReport("test-gate", "test"))
       else {
-        const { rep, groups } = testGate(t, cfg, { base: opts.base, staged })
-        reps.push(applyMode(rep, cfg, "test"))
-        if ((opts.run || (hook && cfg.hook.runTests)) && rep.ok) reps.push(runTests(groups, cfg))
+        const r = testGate(t, cfg, { base: opts.base, staged })
+        reps.push(applyMode(r.rep, cfg, "test"))
+        if (!r.rep.ok) ok = false
+        for (const [m, s] of r.groups) groups.set(m, new Set(s))
       }
+      if (!bugfixAddReports(t, cfg, { base: opts.base, staged }, reps, groups)) ok = false
+      if ((opts.run || (hook && cfg.hook.runTests)) && ok) reps.push(runTests(groups, cfg))
       if (cfg.ocr.enabled && cfg.ocr.required) reps.push(runGate("ocr", cfg, "ocr-gate", () => ocrGate(t, cfg, { ...opts, run: false, staged, hook })))
       for (const r of reps) { r.print(); if (!r.ok) code = 1 }
       if (code && hook && gateMode(cfg, "hook") === "warn") { console.log(`\ntrellis-plus pre-commit: (hook=warn, ${gateInfo(cfg, "hook").from}) the checks above would block this commit; letting it through`); return process.exit(0) }

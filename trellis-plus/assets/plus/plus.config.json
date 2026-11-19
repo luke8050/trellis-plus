@@ -23,6 +23,11 @@
     "maxRounds": 2
   },
   "profile": "standard",
+  "bugfix": {
+    "scopeLock": "confirm",
+    "warnFiles": 5,
+    "warnLines": 200
+  },
   "gates": {},
   "testGate": {
     "include": [

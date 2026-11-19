@@ -16,7 +16,7 @@ For every changed/added file matching `testGate.include` (default `*Controller.j
 - Services: every changed non-private method name is referenced by the test class (approximation by name, `testGate.methodLevel`: warn by default). Controllers are checked by file only;
 - `--run` executes the tests per module: `mvn -q -pl <module> -am test -Dtest=<classes> -Dsurefire.failIfNoSpecifiedTests=false` (root module: no `-pl`).
 
-Pure interfaces are skipped. Exemptions only via `implement.md` → 测试豁免 (`path.java: reason`); they are printed for human sign-off.
+Pure interfaces are skipped. Feature exemptions only via `implement.md` → 测试豁免 (`path.java: reason`); they are printed for human sign-off. In `flow bugfix`, `bug-verify` also runs here (scope confirmation, regression test in the diff + before-fix evidence, risk signals): place Service/Controller regression tests in the matching `*Test.java`, and stop to ask the user if an unlisted file is reported.
 
 ## Tier limits
 

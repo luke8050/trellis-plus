@@ -466,3 +466,44 @@ OCR：`ocrGate`、`extractFindings`、`parseTriage`、`matchEntry`、`hasCodeEvi
 - 流程记录里“通过则之前所有步骤 done”是一种推断（比如 align 被 off 时 1.1 也会被后面的 lint-plan 带成 done）；pre-start 在 `designReview=warn`（standard 的 L 档）下通过会把 1.7 一并记成 done（视为“已豁免”）。
 - 3.4 在 hook 里不写 task.json（避免提交时弄脏工作区），只在 `status` 里推断。
 - 仍未验证：Windows、内网 npm 源；本轮没有发布到 npm。
+
+## v3.2 会话进度：bugfix 流程（2026-11-15）
+
+**来源**：`luke8050/trellis-plus` 基线（版本号仍是 3.0.0，**未改 `package.json`，版本号由用户决定**，建议 3.1.0）。回归的 `BASE` 因仓库已删 `trellis-opencode/`，从 git 历史恢复：`git archive a8c5feb^ trellis-opencode` → `/tmp/base/trellis-opencode`（或用 §「仓库里哪些文件…」里的 `trellis init --opencode` 重新生成）。
+
+### 用户确认的决定
+1. 范围锁超界：**默认提示 + 人工确认，不默认失败**（`bugfix.scopeLock`: `confirm` 默认 / `error` / `off`；用户同意后记入 bugfix.md 第 8 节 `- 路径 — 原因（用户确认：…）`，或补进第 4 节）。
+2. 红绿校验放第二阶段（未做）。
+3. bugfix flow **不要 prd.md，不跑 align**（也不跑 lint-plan / design-review，不分级）。
+4. workflow 注入块回归线 7000 → **8000** 字节（实测 7614）。
+5. `bugfix.md` 必须写清**修复方案**（门禁：章节存在、≥ 40 字、非占位）。
+6. bugfix 之后**必须新增或修改单元测试**：回归测试 `类#方法` 必须出现在本次 diff（方法级，含改已有测试方法体），无论改的是不是 Service；其测试类并入 `test --run` 的 Maven 分组。
+
+### 设计
+- 流程维度与级别正交：`task.json meta.plus_flow="bugfix"`、`meta.plus_bug_source`；`gate flow <task> [bugfix|feature] [--from <task>]`。
+- `gate bug-plan`（`task.py start` 前，pre-start）：`bugfix.md` 八个章节、根因锚点 `文件:行#符号` 真实存在、修复方案、允许改动文件、回归测试存在、高风险引用。`gate bug-verify`（并入 `test` 与 `pre-commit`，`--base/--staged`）：范围锁、回归测试在 diff 且有 `@Test`、>3 个 Service/Controller 或跨 2 模块 = 不是 bugfix（指向 `flow feature` + L）、pom/SQL 必须有第 7 节处置（error）、事务/并发/缓存注解与改动规模（warnFiles 5 / warnLines 200）仅告警。开关 `gates.bugfix`（light 档为 warn）。
+- bugfix 任务的 `seed` 只生成 `bugfix.md`，并向 implement/check 的 jsonl 登记单测指南与源任务的 prd/design；`status`、OCR 背景（根因 + 修复方案 + 允许文件 + 回归测试 + bug 专用审查指令）都按 flow 分支；align / lint-plan / design-review 对 bugfix 任务只打印说明。
+- 新文件：`assets/plus/templates/bugfix.md`、`assets/skills/plus-bugfix/SKILL.md`；改动：`gate.mjs`（+≈630 行，现 1971 行）、`assets/workflow/index.md`（+1 条）、`trellis-plus.mjs`（planning 面包屑 392 字符，仍含 1.6/1.7）、`plus.config.json`（`bugfix` 键）。安装器自动遍历 assets，无需改文件清单。
+
+### 验证（实际执行）
+- 全量回归：`BASE=/tmp/base/trellis-opencode bash test-harness/run-regression.sh` → **901 通过 / 0 失败 / 1 跳过**（原 728；新增 S 组 173 条）。跳过项仍是 v1.1→v2 升级用例。
+- S 组可单独跑：`ONLY=S`。每条规则有正例、反例、反向对照（`reverse` 临时破坏 gate.mjs 后断言必须失败，恢复后再通过）。
+- 既有断言随 bugfix 门禁调整：`gates` 数量 standard 5→6、strict 7→8；两处 `reverse` 锚点（`--base is honoured`、`test gate honours warn`）因新代码插入而更新，**控制项未删**。
+- 源码 sha256 前 16 位：trellis-plus.mjs `57a8024ace73c5b5`、run-regression.sh `4eef68359dc64a95`、gate.mjs `236b4c37c4731048`、templates/bugfix.md `e1856b507aa89854`、plus-bugfix/SKILL.md `c3860562ba59c41a`。
+- 回归写法提醒：S 组里 `grep` 的 `WARN`/`FAIL` 后是**两个空格**，用 `WARN +`；`setcfg` 定义在 N 组，S 组里有兜底定义；`sreset`（`git checkout -- .`）会还原 `plus.config.json`，配置要在它之后设置。
+
+### 第二阶段 / 未验证
+- **红绿校验**（在原版本的 git worktree 上跑回归测试，确认先红再绿）：未做。
+- **模块级测试命令**（`testGate.moduleCommand`）：用户决定暂不做（避免全模块单测耗时长且不易区分无关失败）。
+- 真实 `ocr`、真实 Maven、真实 OpenCode 子 agent 注入下的 bugfix 流程：均未验证（只用夹具与 fake-ocr / fake-mvn）。
+- 版本号未升（见上）。
+
+### 2026-11-19 P0/P1 评审与修复
+按用户确认修复 P0（1–4）与 P1（5–6），跳过 P1-7（模块级全量单测）：
+- **P0-1 子 agent 注入**：`seedBugfix` 将当前任务的 `bugfix.md` 追加进 `implement.jsonl` / `check.jsonl`、若 `--from` 存在自动回填 `关联任务：`、并将未编辑的 Trellis `prd.md` `TBD` 骨架替换为指向 `bugfix.md` 的指针。
+- **P0-2 补丁与提示适配**：更新 `assets/patches/agent-{implement,check}.md`、`assets/workflow/phase2.md`、`assets/skills/plus-test-gate/SKILL.md` 与 OCR 委托模式提示（bugfix 指向 `bugfix.md`）；workflow 三块总计 7804 字节（≤ 8000）。
+- **P0-3 解耦规划与先红实测**：`bug-plan`（`task.py start` 前）接受第 5 节“修复前”列填写 `待先红验证`（无需在 start 前改代码）；`bug-verify` 禁止仍为 `待先红验证` 或过短，强制编码阶段先红后绿并回填实测失败命令与摘要。
+- **P0-4 既有门禁交互修复**：① `gate test --run` / `pre-commit --run` 在 `bug-verify` 失败时不再跑 Maven，且 `gates.test=off` 不再连带跳过 `gates.bugfix`；② `cmdFlow bugfix` 清除旧 `plus_tier`、`cmdTier` 拒绝为 bugfix 任务设分级、`testGate` 忽略 bugfix 任务的 `tier S/M` 限制；③ `gate anchors` 对 bugfix 任务校验 `bugfix.md` 锚点；④ 模板与 skill 明确 Service/Controller 回归测试写在对应 `*Test.java`。
+- **P1-5 规模与高风险前置 + 复杂缺陷升级通道**：抽取 `checkBugfixScaleAndRisk`，在 `bug-plan`（基于第 4 节）与 `bug-verify`（基于 diff，含跨模块非 Service 代码）同步检查；超过 3 个 Service/Controller 或跨模块时，除拆任务或转 `flow feature` + L 级外，允许在 `7 高风险处置` 写明回滚/兼容方案并附 `用户确认：<姓名/日期>` 升级留在 bugfix 流程。
+- **P1-6 范围锁 `confirm` 改为未确认即阻断**：`bugfix.scopeLock="confirm"`（默认）对未在 `8 范围确认`（含 `用户确认`）或 `4 允许改动文件` 中声明的改动返回退出码 1，避免 AI 忽略 `WARN`；`error` 为严格模式（仅认第 4 节，忽略第 8 节）；`off` 关闭。
+- **验证**：全量回归 `PATH="/usr/bin:$PATH" BASE=/tmp/base/trellis-opencode bash trellis-plus/test-harness/run-regression.sh` → **938 通过 / 0 失败 / 1 跳过**（较 901 新增 37 条正向/反向对照，控制项未删）。源码 sha256 前 16 位：`trellis-plus.mjs` `07269b20bd46ffb1`、`run-regression.sh` `bc3afccc64c56179`、`gate.mjs` `c81f96b9392abc8c`（2042 行）、`templates/bugfix.md` `45ccd7391283b37b`、`plus-bugfix/SKILL.md` `c43faf3001f229af`。

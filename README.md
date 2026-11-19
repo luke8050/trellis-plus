@@ -169,6 +169,23 @@ AI 先看代码给出级别建议与理由，你在对话里选定后才继续�
 
 阶段之间靠文件交接，建议每个阶段新开会话。`gate status <task>` 随时打印下一步。
 
+## Bug 修复流程（flow bugfix）
+
+修复**已提交 / 已发布功能**的缺陷时，不走 S/M/L 分级，也不写 `prd.md`、不跑 `align`：流程维度与级别正交，写在 `task.json` 的 `meta.plus_flow`。
+
+```bash
+node ./.trellis/plus/gate.mjs flow <task> bugfix --from <产生缺陷的原任务目录名>   # 设为 bugfix 流程（--from 可省）
+node ./.trellis/plus/gate.mjs seed <task>                                           # 只生成 bugfix.md
+node ./.trellis/plus/gate.mjs bug-plan <task>                                       # task.py start 前自动检查
+```
+
+一份 `bugfix.md` 讲清楚：现象与复现 → **根因**（`文件:行#符号` 锚点，gate 核对真实存在）→ **修复方案**（改哪个类/方法、改成什么逻辑、为什么能消除根因、什么保持不变，≥ 40 字）→ 允许改动文件 → **回归测试**（`类#方法`，必须新增或修改）→ 影响面 → 高风险处置（改 pom / SQL 时必填）→ 范围确认。
+
+- `bug-plan`（开始前）：章节齐全、根因锚点真实、修复方案写清楚、允许改动文件与回归测试存在，并前置检查规模/高风险（pom/SQL、>3 个 Service/Controller 或跨模块）；规划阶段“修复前”列可填 `待先红验证`（无需在 `task.py start` 前改代码）。
+- `bug-verify`（并入 `test` 与 `pre-commit`）：①范围锁：`bugfix.scopeLock` 默认 `confirm`，改了第 4 节没列的非测试文件会**阻断并要求向用户确认**，用户同意后记入第 8 节“范围确认”或补进第 4 节即放行；`error` 为严格模式（仅认第 4 节，第 8 节不放行）；`off` 关闭；测试文件不受限。②**修复必须带单元测试**：回归测试方法必须出现在本次改动里（不论改的是不是 Service），第 5 节“修复前”须回填实测失败命令与摘要，其测试类并入 Maven 运行。③超过 3 个 Service/Controller 或跨模块时，拆任务、改 `flow feature` + L 级，或经用户确认后在第 7 节写明回滚/兼容方案并附 `用户确认`；改 pom/SQL 无第 7 节处置说明则失败；事务/并发/缓存注解、改动过大只告警。
+- `seed` 会把 `bugfix.md`（以及原任务的 `prd.md`/`design.md`）注入 `implement.jsonl` / `check.jsonl`；OCR 与 git hook 照常；OCR 背景材料改为根因 + 修复方案 + 允许改动文件 + 回归测试。
+- 第二阶段（未做）：红绿校验（在原版本上跑回归测试确认先红）、模块级 Maven 命令（`testGate.moduleCommand`）。
+
 ## 门禁命令
 
 `gate.mjs` 随仓库提交，队友无需安装本工具：
@@ -184,6 +201,8 @@ node .trellis/plus/gate.mjs <command> [task]
 | `align <task>` | `prd.md`：对齐状态、待确认问题清零、决策记录非空、需求编号 `R<n>` |
 | `anchors <task>` | 核对 `design.md` / `implement.md` / `code-map.md` 里的 `文件:行#符号` 锚点是否真实存在 |
 | `lint-plan <task>` | 体积上限、占位符、锚点、章节完整性、需求覆盖矩阵、影响分析（≥ 5 处引用须标高风险）、测试矩阵 |
+| `flow <task> [bugfix\|feature] [--from]` | 查看 / 设置流程；bugfix 流程无级别、无 prd、不跑 align |
+| `bug-plan <task>` / `bug-verify [--base] [--staged]` | bugfix 流程：开始前检查 `bugfix.md` / 范围锁、回归测试、风险信号（后者并入 `test`、`pre-commit`） |
 | `design-review <task>` | L 级：报告头 `阻塞：N` 与表格一致，每个阻塞在 resolution 里都有采纳 / 驳回（驳回须给证据） |
 | `test [--run] [--base] [--staged]` | 单测门禁；`--run` 按模块执行 Maven |
 | `ocr [--run] [--inspect] [--force --reason]` | OCR 与分诊；报告过期判定以"报告与其分诊中较新者"为基准 |
@@ -203,7 +222,8 @@ node .trellis/plus/gate.mjs <command> [task]
 | `profile` | `strict` / `standard`（默认）/ `light` |
 | `gates.<name>` | 覆盖单项：`error` 阻断 / `warn` 告警 / `off` 关闭；非法值让所有 gate 命令退出 2，不会静默放行 |
 | `limits` | 文档体积上限（prd 10 KB、design M 12 KB / L 30 KB、implement 20 KB、合计 60 KB） |
-| `tiers.maxClassesM` | M 级允许改动的 Service / Controller 上限 |
+| `tiers.maxClassesM` | M 级允许改动的 Service / Controller 上限（bugfix 流程同用此上限） |
+| `bugfix.*` | `scopeLock`（`confirm` 默认：超界阻断直到用户确认记入第 8 节或补进第 4 节 / `error` 严格只认第 4 节 / `off`）、`warnFiles`（5）、`warnLines`（200）；开关 `gates.bugfix` |
 | `testGate.*` | `methodLevel`（`warn` / `error` / `off`）、`runCommand` / `runCommandRoot`、包含与排除路径 |
 | `ocr.*` | `mode`（`auto` / `cli` / `delegate`）、`maxRerun`、`blockingSeverities` |
 | `hook.runTests` | hook 里是否真跑 Maven（默认只做静态检查） |

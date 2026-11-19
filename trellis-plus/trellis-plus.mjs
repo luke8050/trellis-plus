@@ -195,7 +195,7 @@ const blockRe = (n) => new RegExp(`${BEGIN(n)}[\\s\\S]*?${END(n)}\\n\\n`)
 // Per-turn text: each [plus] line is injected on EVERY turn, so keep the lines of one block under ~400 characters in total.
 const BREADCRUMBS = {
   planning: [
-    "[plus] Tier first (user chooses): `node ./.trellis/plus/gate.mjs tier <TASK_DIR> S|M|L --reason \"…\"`. Overrides trellis-brainstorm: no design.md/implement.md now (1.6, new session); read code via code-map/grep only. M/L: suggest /grill-me (skip if absent), record D<n> in prd.md (or `无：原因`), `gate.mjs align`. 1.6 draft → `lint-plan`; 1.7 review: L only. `gate.mjs status <TASK_DIR>` = next.",
+    "[plus] Bug fix: `node ./.trellis/plus/gate.mjs flow <TASK_DIR> bugfix --from <src>` (skill plus-bugfix). Else tier first: `gate.mjs tier <TASK_DIR> S|M|L --reason \"…\"` (user chooses). Overrides trellis-brainstorm: no design/implement now (1.6). M/L: /grill-me (skip if absent), D<n> in prd.md (or `无：原因`), `gate.mjs align`; 1.6 `lint-plan`; L: 1.7 review. `gate.mjs status <TASK_DIR>` = next.",
   ],
   in_progress: [
     "[plus] After trellis-check: 2.4 `node ./.trellis/plus/gate.mjs test --task <TASK_DIR> --run`, then 2.5 `gate.mjs ocr --task <TASK_DIR> --run`. List findings + proposed fixes, edit only after the user confirms; triage each (critical/high: fix, or false-positive with `path:line`); rerun only to verify critical/high fixes (max 2; no --force without the user). Commit: the git hook re-checks.",
@@ -260,7 +260,7 @@ const TASKPY_BLOCK = `    # trellis-plus:begin hard-gate
         if _plus_node is None:
             print(colored("Warning: trellis-plus pre-start gate skipped (node not found)", Colors.YELLOW))
         elif _plus_sp.run([_plus_node, str(_plus_gate), "pre-start", str(full_path)]).returncode != 0:
-            print(colored("Error: trellis-plus pre-start gate failed (tier gates: align / lint-plan / design review).", Colors.RED))
+            print(colored("Error: trellis-plus pre-start gate failed (tier gates: align / lint-plan / design review, or bug-plan).", Colors.RED))
             print("Fix the problems above. Deliberate bypass: TRELLIS_PLUS_SKIP_GATE=1 task.py start ...")
             return 1
     # trellis-plus:end hard-gate
